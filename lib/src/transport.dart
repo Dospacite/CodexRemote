@@ -495,15 +495,10 @@ class RelaySecureTransport implements AppTransport {
       ),
     );
     final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
-    final salt = _canonicalJson(<String, dynamic>{
-      'a': sessionNonce.compareTo(peerSessionNonce) <= 0
-          ? sessionNonce
-          : peerSessionNonce,
-      'b': sessionNonce.compareTo(peerSessionNonce) <= 0
-          ? peerSessionNonce
-          : sessionNonce,
-      'type': 'codex-remote-relay-salt-v1',
-    });
+    final salt = await deriveRelaySaltBytes(
+      localNonce: sessionNonce,
+      peerNonce: peerSessionNonce,
+    );
     _sessionSecretKey = await hkdf.deriveKey(
       secretKey: sharedSecret,
       nonce: salt,
@@ -628,6 +623,16 @@ Uri relayWebSocketUri(Uri relayUri) {
     scheme: wsScheme,
     path: normalizedPath,
   );
+}
+
+@visibleForTesting
+Future<List<int>> deriveRelaySaltBytes({
+  required String localNonce,
+  required String peerNonce,
+}) async {
+  final sorted = <String>[localNonce, peerNonce]..sort();
+  final digest = await Sha256().hash(utf8.encode(sorted.join()));
+  return digest.bytes;
 }
 
 String _b64urlEncode(List<int> bytes) {
