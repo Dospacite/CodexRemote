@@ -292,7 +292,7 @@ class RelaySecureTransport implements AppTransport {
     _settings = settings;
     _readyCompleter = Completer<void>();
     _channel = IOWebSocketChannel.connect(
-      Uri.parse('${settings.relayUrl}/ws'),
+      relayWebSocketUri(relayUri),
       pingInterval: const Duration(seconds: 20),
       connectTimeout: const Duration(seconds: 15),
     );
@@ -612,6 +612,22 @@ bool _isAllowedRelayUri(Uri relayUri) {
       host == '127.0.0.1' ||
       host == '::1' ||
       host.endsWith('.local');
+}
+
+@visibleForTesting
+Uri relayWebSocketUri(Uri relayUri) {
+  final wsScheme = switch (relayUri.scheme) {
+    'https' => 'wss',
+    'http' => 'ws',
+    _ => relayUri.scheme,
+  };
+  final normalizedPath = relayUri.path.endsWith('/')
+      ? '${relayUri.path}ws'
+      : '${relayUri.path}/ws';
+  return relayUri.replace(
+    scheme: wsScheme,
+    path: normalizedPath,
+  );
 }
 
 String _b64urlEncode(List<int> bytes) {
