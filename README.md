@@ -59,7 +59,11 @@ flutter analyze
 flutter test
 ```
 
-The repository also contains an app-server smoke test in [`test/app_server_protocol_smoke_test.dart`](test/app_server_protocol_smoke_test.dart). It expects a local app-server listening on `ws://127.0.0.1:5000`.
+The repository also contains an app-server smoke test in [`test/app_server_protocol_smoke_test.dart`](test/app_server_protocol_smoke_test.dart). It is opt-in and expects a local app-server listening on `ws://127.0.0.1:5000`.
+
+```bash
+CODEX_REMOTE_RUN_APP_SERVER_SMOKE=1 flutter test test/app_server_protocol_smoke_test.dart
+```
 
 ## Project Layout
 

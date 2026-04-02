@@ -5,6 +5,9 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  const runSmokeEnv = 'CODEX_REMOTE_RUN_APP_SERVER_SMOKE';
+  final shouldRunSmoke = Platform.environment[runSmokeEnv] == '1';
+
   test('app-server websocket smoke test', () async {
     final socket = await WebSocket.connect(
       'ws://127.0.0.1:5000',
@@ -192,5 +195,7 @@ void main() {
       streamedOutputByProcessId[interactiveProcessId]?.toString(),
       contains('ping-from-test'),
     );
-  });
+  }, skip: !shouldRunSmoke
+      ? 'Set $runSmokeEnv=1 when a local app-server is listening on ws://127.0.0.1:5000.'
+      : false);
 }
