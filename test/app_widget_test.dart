@@ -1793,6 +1793,32 @@ void main() {
       expect(resumedEntry.body, 'Partial reply');
     },
   );
+
+  test('controller reconnects after resume when transport drops unexpectedly', () async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
+    await controller.saveSettings(
+      controller.settings.copyWith(
+        connectionMode: ConnectionMode.relay,
+        relayUrl: 'https://relay.example.com',
+      ),
+    );
+
+    await controller.sendPrompt('first');
+    expect(controller.status, ConnectionStatus.ready);
+    expect(transport.connectCount, 1);
+
+    transport.simulateUnexpectedDisconnect();
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(controller.status, ConnectionStatus.error);
+
+    controller.didChangeAppLifecycleState(AppLifecycleState.paused);
+    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(transport.connectCount, 2);
+    expect(controller.status, ConnectionStatus.ready);
+  });
 }
 
 class _FakeTransport implements AppTransport {
@@ -1862,6 +1888,11 @@ class _FakeTransport implements AppTransport {
   @override
   Future<void> disconnect() async {
     _connected = false;
+  }
+
+  void simulateUnexpectedDisconnect() {
+    _connected = false;
+    _controller.addError(StateError('Transport disconnected.'));
   }
 
   @override

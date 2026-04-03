@@ -85,6 +85,10 @@ class DirectWebSocketTransport implements AppTransport {
   @override
   bool get isConnected => _connected;
 
+  void _notifyUnexpectedDisconnect() {
+    _messages.addError(StateError('Transport disconnected.'));
+  }
+
   @override
   Future<void> connect(AppSettings settings) async {
     await disconnect();
@@ -105,7 +109,11 @@ class DirectWebSocketTransport implements AppTransport {
       },
       onError: _messages.addError,
       onDone: () {
+        final wasConnected = _connected;
         _connected = false;
+        if (wasConnected) {
+          _notifyUnexpectedDisconnect();
+        }
       },
     );
     _connected = true;
@@ -145,6 +153,10 @@ class AndroidForegroundTransport implements AppTransport {
   @override
   bool get isConnected => _connected;
 
+  void _notifyUnexpectedDisconnect() {
+    _messages.addError(StateError('Transport disconnected.'));
+  }
+
   @override
   Future<void> connect(AppSettings settings) async {
     await _subscription?.cancel();
@@ -166,9 +178,12 @@ class AndroidForegroundTransport implements AppTransport {
         _messages.addError(error, stackTrace);
       },
       onDone: () {
+        final wasConnected = _connected;
         _connected = false;
         if (!readyCompleter.isCompleted) {
           readyCompleter.completeError(StateError('Transport disconnected.'));
+        } else if (wasConnected) {
+          _notifyUnexpectedDisconnect();
         }
       },
     );
@@ -277,6 +292,10 @@ class AndroidRelaySecureTransport implements AppTransport {
   @override
   bool get isConnected => _connected;
 
+  void _notifyUnexpectedDisconnect() {
+    _messages.addError(StateError('Transport disconnected.'));
+  }
+
   @override
   Future<void> connect(AppSettings settings) async {
     await disconnect();
@@ -315,9 +334,12 @@ class AndroidRelaySecureTransport implements AppTransport {
         }
       },
       onDone: () {
+        final wasConnected = _connected;
         _connected = false;
         if (!readyCompleter.isCompleted) {
           readyCompleter.completeError(StateError('Transport disconnected.'));
+        } else if (wasConnected) {
+          _notifyUnexpectedDisconnect();
         }
       },
     );
@@ -669,6 +691,10 @@ class RelaySecureTransport implements AppTransport {
   @override
   bool get isConnected => _connected;
 
+  void _notifyUnexpectedDisconnect() {
+    _messages.addError(StateError('Transport disconnected.'));
+  }
+
   @override
   Future<void> connect(AppSettings settings) async {
     await disconnect();
@@ -703,7 +729,11 @@ class RelaySecureTransport implements AppTransport {
         }
       },
       onDone: () {
+        final wasConnected = _connected;
         _connected = false;
+        if (wasConnected) {
+          _notifyUnexpectedDisconnect();
+        }
       },
     );
     await _readyCompleter!.future.timeout(const Duration(seconds: 20));
