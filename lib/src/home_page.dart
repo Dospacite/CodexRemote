@@ -6490,6 +6490,7 @@ class _ThreadTile extends StatelessWidget {
     final theme = Theme.of(context);
     final isOpening = controller.openingThreadId == thread.id;
     final isFavorite = controller.isThreadFavorite(thread.id);
+    final hasActiveTurn = controller.threadHasActiveTurn(thread.id);
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -6503,11 +6504,28 @@ class _ThreadTile extends StatelessWidget {
           Row(
             children: <Widget>[
               Expanded(
-                child: Text(
-                  thread.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: theme.textTheme.titleMedium,
+                child: Row(
+                  children: <Widget>[
+                    if (hasActiveTurn)
+                      Container(
+                        key: ValueKey<String>('thread-active-turn-${thread.id}'),
+                        width: 10,
+                        height: 10,
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.primary,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    Expanded(
+                      child: Text(
+                        thread.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium,
+                      ),
+                    ),
+                  ],
                 ),
               ),
               IconButton(

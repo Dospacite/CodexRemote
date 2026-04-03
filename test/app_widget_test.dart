@@ -396,6 +396,49 @@ void main() {
   );
 
   testWidgets(
+    'thread list shows an indicator for threads with active turns',
+    (WidgetTester tester) async {
+      final transport = _FakeTransport();
+      transport.threadListData = <Map<String, dynamic>>[
+        <String, dynamic>{
+          'id': 'thr_1',
+          'preview': 'Running',
+          'cwd': '/workspace/active',
+          'source': 'local',
+          'modelProvider': 'openai',
+          'status': 'inProgress',
+          'name': 'Running thread',
+        },
+        <String, dynamic>{
+          'id': 'thr_idle',
+          'preview': 'Idle',
+          'cwd': '/workspace/idle',
+          'source': 'local',
+          'modelProvider': 'openai',
+          'status': 'idle',
+          'name': 'Idle thread',
+        },
+      ];
+      final controller = AppController.testing(transport: transport);
+      await controller.sendPrompt('first');
+
+      await tester.pumpWidget(CodexRemoteApp(controller: controller));
+      await tester.tap(find.byTooltip('Threads'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(
+        find.byKey(const ValueKey<String>('thread-active-turn-thr_1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('thread-active-turn-thr_idle')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
     'connecting dims content below the app bar and shows a centered spinner',
     (WidgetTester tester) async {
       final controller = AppController.testing();
@@ -1131,20 +1174,19 @@ void main() {
     },
   );
 
-  test(
-    'switching threads unsubscribes the previous thread subscription',
-    () async {
-      final transport = _FakeTransport();
-      final controller = AppController.testing(transport: transport);
+  test('switching threads remains possible while another turn is running', () async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
 
-      await controller.resumeThreadFromHistory('thr_1');
-      controller.activeTurnId = null;
-      await controller.resumeThreadFromHistory('thr_2');
+    await controller.sendPrompt('first');
+    expect(controller.threadHasActiveTurn('thr_1'), isTrue);
 
-      expect(transport.unsubscribedThreadIds, contains('thr_1'));
-      expect(controller.activeThreadId, 'thr_2');
-    },
-  );
+    await controller.resumeThreadFromHistory('thr_2');
+
+    expect(controller.activeThreadId, 'thr_2');
+    expect(controller.threadHasActiveTurn('thr_1'), isTrue);
+    expect(controller.hasActiveTurn, isTrue);
+  });
 
   test('file download streams to the chosen directory', () async {
     final transport = _FakeTransport();
@@ -1919,6 +1961,7 @@ class _FakeTransport implements AppTransport {
   String? lastThreadStartCwd;
   bool failOnDuplicateWatchPaths = false;
   bool failHomeDirectoryRead = false;
+  List<Map<String, dynamic>> threadListData = <Map<String, dynamic>>[];
 
   @override
   Stream<String> get messages => _controller.stream;
@@ -1973,6 +2016,13 @@ class _FakeTransport implements AppTransport {
           'cwd': lastThreadStartCwd ?? '/thread-cwd',
           'name': 'Thread One',
         },
+      });
+      return;
+    }
+    if (method == 'thread/list') {
+      _respond(id as int, <String, dynamic>{
+        'data': threadListData,
+        'nextCursor': null,
       });
       return;
     }

@@ -78,6 +78,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   String activeThreadCwd = '';
   String? _subscribedThreadId;
   String? activeTurnId;
+  final Map<String, String> _activeTurnIdsByThread = <String, String>{};
   bool isLoadingHistory = false;
   String? openingThreadId;
   bool isLoadingFiles = false;
@@ -245,6 +246,14 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       .length;
 
   bool get hasDownloads => downloadRecords.isNotEmpty;
+  bool threadHasActiveTurn(String threadId) {
+    final normalized = threadId.trim();
+    if (normalized.isEmpty) {
+      return false;
+    }
+    return _activeTurnIdsByThread.containsKey(normalized);
+  }
+
   bool isAutomationRunning(String automationId) {
     return _runningAutomationIds.contains(automationId);
   }
@@ -331,6 +340,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     activeThreadName = null;
     activeThreadCwd = '';
     activeTurnId = null;
+    _activeTurnIdsByThread.clear();
     contextUsagePercent = null;
     isSteering = false;
     entries.clear();
@@ -424,6 +434,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     status = ConnectionStatus.disconnected;
     statusMessage = 'Disconnected';
     activeTurnId = null;
+    _activeTurnIdsByThread.clear();
     openingThreadId = null;
     _subscribedThreadId = null;
     rateLimitSummary = null;
@@ -2599,8 +2610,7 @@ while not server.served and time.time() < deadline:
     if (activeThreadId == threadId) {
       return;
     }
-    if (hasActiveTurn || isOpeningThread) {
-      _addSystemEntry('Finish the current turn before switching threads.');
+    if (isOpeningThread) {
       return;
     }
 
@@ -2615,10 +2625,6 @@ while not server.served and time.time() < deadline:
     notifyListeners();
 
     try {
-      final previousThreadId = activeThreadId?.trim() ?? '';
-      if (previousThreadId.isNotEmpty && previousThreadId != threadId) {
-        await _unsubscribeFromThread(previousThreadId);
-      }
       final readResponse = await _request('thread/read', <String, dynamic>{
         'threadId': threadId,
         'includeTurns': true,
@@ -2646,6 +2652,9 @@ while not server.served and time.time() < deadline:
       }
       if (resumedTurn is Map<String, dynamic>) {
         _hydrateResumeTurn(resumedTurn);
+      } else {
+        activeTurnId = _activeTurnIdsByThread[threadId];
+        statusMessage = activeTurnId == null ? 'Ready' : 'Turn running';
       }
 
       await saveSettings(
@@ -2796,6 +2805,10 @@ while not server.served and time.time() < deadline:
       final turn = response?['turn'];
       if (turn is Map<String, dynamic>) {
         activeTurnId = turn['id'] as String?;
+        final threadId = activeThreadId?.trim() ?? '';
+        if (threadId.isNotEmpty && activeTurnId != null) {
+          _activeTurnIdsByThread[threadId] = activeTurnId!;
+        }
         statusMessage = 'Turn running';
         notifyListeners();
       }
@@ -2832,6 +2845,10 @@ while not server.served and time.time() < deadline:
       final turnId = response?['turnId']?.toString();
       if (turnId != null && turnId.isNotEmpty) {
         activeTurnId = turnId;
+        final threadId = activeThreadId?.trim() ?? '';
+        if (threadId.isNotEmpty) {
+          _activeTurnIdsByThread[threadId] = turnId;
+        }
       }
       _addSystemEntry('Sent as steer input.');
       return true;
@@ -3361,44 +3378,69 @@ while not server.served and time.time() < deadline:
       case 'turn/started':
         final turn = typedParams['turn'];
         if (turn is Map<String, dynamic>) {
-          activeTurnId = turn['id']?.toString();
-          statusMessage = 'Turn running';
-          notifyListeners();
+          final threadId =
+              typedParams['threadId']?.toString() ?? activeThreadId?.trim() ?? '';
+          final turnId = turn['id']?.toString();
+          if (threadId.isNotEmpty && turnId != null && turnId.isNotEmpty) {
+            _activeTurnIdsByThread[threadId] = turnId;
+          }
+          if (threadId == (activeThreadId?.trim() ?? '')) {
+            activeTurnId = turnId;
+            statusMessage = 'Turn running';
+            notifyListeners();
+          }
         }
       case 'turn/completed':
         final turn = typedParams['turn'];
         if (turn is Map<String, dynamic>) {
-          activeTurnId = null;
-          isSteering = false;
+          final threadId =
+              typedParams['threadId']?.toString() ?? activeThreadId?.trim() ?? '';
+          if (threadId.isNotEmpty) {
+            _activeTurnIdsByThread.remove(threadId);
+          }
           final turnStatus = turn['status']?.toString() ?? 'completed';
-          statusMessage = 'Ready';
-          if (turnStatus != 'completed') {
-            _addSystemEntry('Turn finished with status $turnStatus.');
+          if (threadId == (activeThreadId?.trim() ?? '')) {
+            activeTurnId = null;
+            isSteering = false;
+            statusMessage = 'Ready';
+            if (turnStatus != 'completed') {
+              _addSystemEntry('Turn finished with status $turnStatus.');
+            }
+            final error = turn['error'];
+            if (error is Map<String, dynamic>) {
+              _addSystemEntry(error['message']?.toString() ?? 'Turn failed.');
+            }
+            notifyListeners();
           }
-          final error = turn['error'];
-          if (error is Map<String, dynamic>) {
-            _addSystemEntry(error['message']?.toString() ?? 'Turn failed.');
-          }
-          notifyListeners();
           final turnId =
               turn['id']?.toString() ?? typedParams['turnId']?.toString() ?? '';
           if (turnStatus == 'completed' && turnId.isNotEmpty) {
             unawaited(_handleAutomationTurnCompleted(turnId));
           }
-          unawaited(_processPendingPrompts());
+          if (threadId == (activeThreadId?.trim() ?? '')) {
+            unawaited(_processPendingPrompts());
+          }
         }
       case 'item/started':
-        _handleItem(
-          typedParams['item'],
-          isCompleted: false,
-          turnId: typedParams['turnId']?.toString(),
-        );
+        final itemThreadId = typedParams['threadId']?.toString() ?? '';
+        if (itemThreadId.isEmpty ||
+            itemThreadId == (activeThreadId?.trim() ?? '')) {
+          _handleItem(
+            typedParams['item'],
+            isCompleted: false,
+            turnId: typedParams['turnId']?.toString(),
+          );
+        }
       case 'item/completed':
-        _handleItem(
-          typedParams['item'],
-          isCompleted: true,
-          turnId: typedParams['turnId']?.toString(),
-        );
+        final itemThreadId = typedParams['threadId']?.toString() ?? '';
+        if (itemThreadId.isEmpty ||
+            itemThreadId == (activeThreadId?.trim() ?? '')) {
+          _handleItem(
+            typedParams['item'],
+            isCompleted: true,
+            turnId: typedParams['turnId']?.toString(),
+          );
+        }
       case 'item/agentMessage/delta':
         final itemId = typedParams['itemId']?.toString();
         final delta = typedParams['delta']?.toString() ?? '';
@@ -4406,9 +4448,17 @@ while not server.served and time.time() < deadline:
 
     if (turn['status']?.toString() == 'inProgress') {
       activeTurnId = turnId;
+      final threadId = activeThreadId?.trim() ?? '';
+      if (threadId.isNotEmpty) {
+        _activeTurnIdsByThread[threadId] = turnId;
+      }
       statusMessage = 'Turn running';
     } else if (activeTurnId == turnId) {
       activeTurnId = null;
+      final threadId = activeThreadId?.trim() ?? '';
+      if (threadId.isNotEmpty) {
+        _activeTurnIdsByThread.remove(threadId);
+      }
       statusMessage = 'Ready';
     }
   }
