@@ -10,6 +10,9 @@ import 'package:web_socket_channel/io.dart';
 
 import 'models.dart';
 
+const String _androidEventChannelName = 'codex_remote/android_events';
+const String _androidMethodChannelName = 'codex_remote/android_transport';
+
 abstract class AppTransport {
   Stream<String> get messages;
   bool get isConnected;
@@ -125,11 +128,8 @@ class DirectWebSocketTransport implements AppTransport {
 
 class AndroidForegroundTransport implements AppTransport {
   AndroidForegroundTransport()
-    : _events = const EventChannel(_eventChannelName),
-      _methods = const MethodChannel(_methodChannelName);
-
-  static const String _eventChannelName = 'codex_remote/android_events';
-  static const String _methodChannelName = 'codex_remote/android_transport';
+    : _events = const EventChannel(_androidEventChannelName),
+      _methods = const MethodChannel(_androidMethodChannelName);
 
   final EventChannel _events;
   final MethodChannel _methods;
@@ -245,6 +245,403 @@ class AndroidForegroundTransport implements AppTransport {
         }
         break;
     }
+  }
+}
+
+class AndroidRelaySecureTransport implements AppTransport {
+  AndroidRelaySecureTransport()
+    : _events = const EventChannel(_androidEventChannelName),
+      _methods = const MethodChannel(_androidMethodChannelName);
+
+  final EventChannel _events;
+  final MethodChannel _methods;
+  final StreamController<String> _messages =
+      StreamController<String>.broadcast();
+  final Ed25519 _signing = Ed25519();
+  final X25519 _keyAgreement = X25519();
+  final Cipher _cipher = Chacha20.poly1305Aead();
+  StreamSubscription<dynamic>? _subscription;
+  Completer<void>? _readyCompleter;
+  bool _connected = false;
+  AppSettings? _settings;
+  KeyPair? _sessionKeyPair;
+  SecretKey? _sessionSecretKey;
+  String? _sessionId;
+  String? _sessionNonce;
+  int _sendCounter = 0;
+  int _receiveCounter = 0;
+
+  @override
+  Stream<String> get messages => _messages.stream;
+
+  @override
+  bool get isConnected => _connected;
+
+  @override
+  Future<void> connect(AppSettings settings) async {
+    await disconnect();
+    if (settings.relayUrl.trim().isEmpty ||
+        settings.relayDeviceId.trim().isEmpty ||
+        settings.relayClientPrivateKey.trim().isEmpty ||
+        settings.relayClientPublicKey.trim().isEmpty ||
+        settings.relayBridgeSigningPublicKey.trim().isEmpty) {
+      throw StateError('Relay mode is selected, but relay pairing is missing.');
+    }
+    final relayUri = Uri.tryParse(settings.relayUrl);
+    if (relayUri == null || !relayUri.hasScheme || relayUri.host.isEmpty) {
+      throw StateError('Relay URL is invalid.');
+    }
+    if (!_isAllowedRelayUri(relayUri)) {
+      throw StateError('Relay mode requires HTTPS for non-local relay servers.');
+    }
+    _settings = settings;
+    final readyCompleter = Completer<void>();
+    _readyCompleter = readyCompleter;
+    _subscription = _events.receiveBroadcastStream().listen(
+      (dynamic event) {
+        if (event is! String) {
+          return;
+        }
+        if (_handleTransportEvent(event, readyCompleter)) {
+          return;
+        }
+        unawaited(_handleRelayMessage(event));
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!readyCompleter.isCompleted) {
+          readyCompleter.completeError(error, stackTrace);
+        } else {
+          _messages.addError(error, stackTrace);
+        }
+      },
+      onDone: () {
+        _connected = false;
+        if (!readyCompleter.isCompleted) {
+          readyCompleter.completeError(StateError('Transport disconnected.'));
+        }
+      },
+    );
+    await _methods.invokeMethod<void>('connect', <String, dynamic>{
+      'url': relayWebSocketUri(relayUri).toString(),
+      'bearerToken': null,
+    });
+    await readyCompleter.future.timeout(const Duration(seconds: 20));
+    _connected = true;
+  }
+
+  @override
+  Future<void> disconnect() async {
+    _connected = false;
+    _sendCounter = 0;
+    _receiveCounter = 0;
+    _sessionId = null;
+    _sessionNonce = null;
+    _sessionKeyPair = null;
+    _sessionSecretKey = null;
+    _settings = null;
+    final ready = _readyCompleter;
+    if (ready != null && !ready.isCompleted) {
+      ready.completeError(StateError('Transport disconnected.'));
+    }
+    _readyCompleter = null;
+    await _subscription?.cancel();
+    _subscription = null;
+    await _methods.invokeMethod<void>('disconnect');
+  }
+
+  @override
+  Future<void> send(String payload) async {
+    final ready = _readyCompleter;
+    if (ready == null) {
+      throw StateError('Relay transport is not connected.');
+    }
+    await ready.future;
+    final secretKey = _sessionSecretKey;
+    final sessionId = _sessionId;
+    final settings = _settings;
+    if (secretKey == null || sessionId == null || settings == null) {
+      throw StateError('Relay session is not ready.');
+    }
+    final counter = _sendCounter++;
+    final aad = _relayAad(
+      counter: counter,
+      deviceId: settings.relayDeviceId,
+      sessionId: sessionId,
+    );
+    final secretBox = await _cipher.encrypt(
+      utf8.encode(payload),
+      secretKey: secretKey,
+      nonce: _nonceFor(prefix: 'CLNT', counter: counter),
+      aad: aad,
+    );
+    final combined = Uint8List.fromList(
+      <int>[...secretBox.cipherText, ...secretBox.mac.bytes],
+    );
+    await _sendRaw(
+      jsonEncode(<String, dynamic>{
+        'counter': counter,
+        'ciphertext': _b64urlEncode(combined),
+        'sessionId': sessionId,
+        'type': 'relay_frame',
+      }),
+    );
+  }
+
+  bool _handleTransportEvent(String event, Completer<void> readyCompleter) {
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(event);
+    } catch (_) {
+      return false;
+    }
+    if (decoded is! Map<String, dynamic>) {
+      return false;
+    }
+    if (decoded['method'] != 'android/transportStatus') {
+      return false;
+    }
+    final params = decoded['params'];
+    if (params is! Map<String, dynamic>) {
+      return true;
+    }
+    final status = params['status']?.toString();
+    switch (status) {
+      case 'connected':
+        break;
+      case 'disconnected':
+        _connected = false;
+        if (!readyCompleter.isCompleted) {
+          readyCompleter.completeError(StateError('Transport disconnected.'));
+        } else {
+          _messages.addError(StateError('Transport disconnected.'));
+        }
+        break;
+      case 'error':
+        _connected = false;
+        final message =
+            params['message']?.toString() ?? 'Android transport error.';
+        if (!readyCompleter.isCompleted) {
+          readyCompleter.completeError(StateError(message));
+        } else {
+          _messages.addError(StateError(message));
+        }
+        break;
+    }
+    return true;
+  }
+
+  Future<void> _sendRaw(String payload) async {
+    await _methods.invokeMethod<void>('send', <String, dynamic>{
+      'payload': payload,
+    });
+  }
+
+  Future<void> _handleRelayMessage(String event) async {
+    final payload = jsonDecode(event) as Map<String, dynamic>;
+    switch (payload['type']) {
+      case 'challenge':
+        await _respondToChallenge(payload);
+      case 'authenticated':
+        break;
+      case 'session_open':
+        await _completeSession(payload);
+      case 'relay_frame':
+        await _handleEncryptedFrame(payload);
+      case 'close_session':
+        final sessionId = payload['sessionId']?.toString();
+        if (sessionId == null || sessionId == _sessionId) {
+          _messages.addError(StateError('Relay session closed by peer.'));
+        }
+      default:
+        break;
+    }
+  }
+
+  Future<void> _respondToChallenge(Map<String, dynamic> payload) async {
+    final settings = _settings;
+    if (settings == null) {
+      return;
+    }
+    final authNonce = _randomToken(12);
+    final authTimestamp = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final sessionKeyPair = await _keyAgreement.newKeyPair();
+    final sessionKeyPairData = await sessionKeyPair.extract();
+    final sessionPublicKey = await sessionKeyPair.extractPublicKey();
+    final sessionNonce = _randomToken(12);
+    final signedAt = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final signingKeyPair = _clientSigningKeyPair(settings);
+    final authSignature = await _signing.sign(
+      _canonicalJson(<String, dynamic>{
+        'authNonce': authNonce,
+        'authTimestamp': authTimestamp,
+        'challenge': payload['challenge'],
+        'connectionId': payload['connectionId'],
+        'deviceId': settings.relayDeviceId,
+        'role': 'client',
+        'type': 'codex-remote-auth-v1',
+      }),
+      keyPair: signingKeyPair,
+    );
+    final sessionSignature = await _signing.sign(
+      _canonicalJson(<String, dynamic>{
+        'deviceId': settings.relayDeviceId,
+        'role': 'client',
+        'sessionNonce': sessionNonce,
+        'sessionPublicKey': _b64urlEncode(sessionPublicKey.bytes),
+        'signedAt': signedAt,
+        'type': 'codex-remote-session-bundle-v1',
+      }),
+      keyPair: signingKeyPair,
+    );
+    _sessionKeyPair = sessionKeyPairData;
+    _sessionNonce = sessionNonce;
+    await _sendRaw(
+      jsonEncode(<String, dynamic>{
+        'authNonce': authNonce,
+        'authSignature': _b64urlEncode(authSignature.bytes),
+        'authTimestamp': authTimestamp,
+        'deviceId': settings.relayDeviceId,
+        'role': 'client',
+        'sessionBundle': <String, dynamic>{
+          'sessionNonce': sessionNonce,
+          'sessionPublicKey': _b64urlEncode(sessionPublicKey.bytes),
+          'signature': _b64urlEncode(sessionSignature.bytes),
+          'signedAt': signedAt,
+        },
+        'type': 'authenticate',
+      }),
+    );
+  }
+
+  Future<void> _completeSession(Map<String, dynamic> payload) async {
+    final settings = _settings;
+    final sessionKeyPair = _sessionKeyPair;
+    final sessionNonce = _sessionNonce;
+    if (settings == null || sessionKeyPair == null || sessionNonce == null) {
+      return;
+    }
+    final peerSigningKey = payload['peerSigningPublicKey']?.toString() ?? '';
+    if (peerSigningKey != settings.relayBridgeSigningPublicKey) {
+      throw StateError('Relay bridge identity does not match the paired bridge.');
+    }
+    final bundle = payload['peerSessionBundle'] as Map<String, dynamic>;
+    final peerSessionPublicKey = bundle['sessionPublicKey']?.toString() ?? '';
+    final peerSessionNonce = bundle['sessionNonce']?.toString() ?? '';
+    final signatureBytes = _b64urlDecode(bundle['signature']?.toString() ?? '');
+    final verified = await _signing.verify(
+      _canonicalJson(<String, dynamic>{
+        'deviceId': settings.relayDeviceId,
+        'role': 'bridge',
+        'sessionNonce': peerSessionNonce,
+        'sessionPublicKey': peerSessionPublicKey,
+        'signedAt': bundle['signedAt'],
+        'type': 'codex-remote-session-bundle-v1',
+      }),
+      signature: Signature(
+        signatureBytes,
+        publicKey: SimplePublicKey(
+          _b64urlDecode(peerSigningKey),
+          type: KeyPairType.ed25519,
+        ),
+      ),
+    );
+    if (!verified) {
+      throw StateError('Bridge session signature verification failed.');
+    }
+    final sharedSecret = await _keyAgreement.sharedSecretKey(
+      keyPair: sessionKeyPair,
+      remotePublicKey: SimplePublicKey(
+        _b64urlDecode(peerSessionPublicKey),
+        type: KeyPairType.x25519,
+      ),
+    );
+    final hkdf = Hkdf(hmac: Hmac.sha256(), outputLength: 32);
+    final salt = await deriveRelaySaltBytes(
+      localNonce: sessionNonce,
+      peerNonce: peerSessionNonce,
+    );
+    _sessionSecretKey = await hkdf.deriveKey(
+      secretKey: sharedSecret,
+      nonce: salt,
+      info: utf8.encode(settings.relayDeviceId),
+    );
+    final sessionId = payload['sessionId']?.toString();
+    if (sessionId == null || sessionId.isEmpty) {
+      throw StateError('Relay did not provide a session identifier.');
+    }
+    _sessionId = sessionId;
+    _sendCounter = 0;
+    _receiveCounter = 0;
+    if (!(_readyCompleter?.isCompleted ?? true)) {
+      _readyCompleter?.complete();
+    }
+  }
+
+  Future<void> _handleEncryptedFrame(Map<String, dynamic> payload) async {
+    final secretKey = _sessionSecretKey;
+    final sessionId = _sessionId;
+    final settings = _settings;
+    if (secretKey == null || sessionId == null || settings == null) {
+      return;
+    }
+    final messageSessionId = payload['sessionId']?.toString();
+    if (messageSessionId != sessionId) {
+      return;
+    }
+    final counter = payload['counter'] as int? ?? -1;
+    if (counter != _receiveCounter) {
+      throw StateError(
+        'Unexpected relay frame counter: expected $_receiveCounter, received $counter.',
+      );
+    }
+    _receiveCounter += 1;
+    final combined = _b64urlDecode(payload['ciphertext']?.toString() ?? '');
+    if (combined.length < 16) {
+      throw StateError('Relay ciphertext is truncated.');
+    }
+    final cipherText = combined.sublist(0, combined.length - 16);
+    final mac = Mac(combined.sublist(combined.length - 16));
+    final secretBox = SecretBox(
+      cipherText,
+      nonce: _nonceFor(prefix: 'BRDG', counter: counter),
+      mac: mac,
+    );
+    final plainBytes = await _cipher.decrypt(
+      secretBox,
+      secretKey: secretKey,
+      aad: _relayAad(
+        counter: counter,
+        deviceId: settings.relayDeviceId,
+        sessionId: sessionId,
+      ),
+    );
+    _messages.add(utf8.decode(plainBytes));
+  }
+
+  Uint8List _relayAad({
+    required int counter,
+    required String deviceId,
+    required String sessionId,
+  }) {
+    return Uint8List.fromList(
+      _canonicalJson(<String, dynamic>{
+        'counter': counter,
+        'deviceId': deviceId,
+        'sessionId': sessionId,
+        'type': 'relay-frame-v1',
+      }),
+    );
+  }
+
+  SimpleKeyPairData _clientSigningKeyPair(AppSettings settings) {
+    return SimpleKeyPairData(
+      _b64urlDecode(settings.relayClientPrivateKey),
+      publicKey: SimplePublicKey(
+        _b64urlDecode(settings.relayClientPublicKey),
+        type: KeyPairType.ed25519,
+      ),
+      type: KeyPairType.ed25519,
+    );
   }
 }
 
@@ -589,9 +986,13 @@ AppTransport createDefaultTransport() {
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android
       ? AndroidForegroundTransport()
       : DirectWebSocketTransport();
+  final relayTransport =
+      !kIsWeb && defaultTargetPlatform == TargetPlatform.android
+      ? AndroidRelaySecureTransport()
+      : RelaySecureTransport();
   return PlatformAdaptiveTransport(
     directTransport: directTransport,
-    relayTransport: RelaySecureTransport(),
+    relayTransport: relayTransport,
   );
 }
 
