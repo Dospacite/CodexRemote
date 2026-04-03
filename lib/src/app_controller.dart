@@ -2885,6 +2885,21 @@ while not server.served and time.time() < deadline:
     return value;
   }
 
+  bool promotePendingPromptToSteer(String id) {
+    final index = pendingPrompts.indexWhere((item) => item.id == id);
+    if (index < 0) {
+      return false;
+    }
+    final current = pendingPrompts[index];
+    if (current.mode == PendingPromptMode.steer) {
+      return false;
+    }
+    pendingPrompts[index] = current.copyWith(mode: PendingPromptMode.steer);
+    notifyListeners();
+    unawaited(_processPendingPrompts());
+    return true;
+  }
+
   Future<void> _processPendingPrompts() async {
     if (pendingPrompts.isEmpty) {
       return;

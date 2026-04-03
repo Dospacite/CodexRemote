@@ -121,6 +121,35 @@ void main() {
     expect(find.text('7d resets Apr 10, 09:00'), findsOneWidget);
   });
 
+  testWidgets('queued prompts can be promoted to steer from the pending bar', (
+    WidgetTester tester,
+  ) async {
+    final controller = AppController.testing();
+    controller.pendingPrompts.add(
+      const PendingPrompt(
+        id: 'pending-queued',
+        text: 'Queued prompt',
+        mode: PendingPromptMode.queued,
+      ),
+    );
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+
+    expect(find.byTooltip('Steer'), findsOneWidget);
+    expect(find.byIcon(Icons.schedule_send_outlined), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(
+        const ValueKey<String>('pending-prompt-promote-pending-queued'),
+      ),
+    );
+    await tester.pump();
+
+    expect(controller.pendingPrompts.first.mode, PendingPromptMode.steer);
+    expect(find.byTooltip('Steer'), findsNothing);
+    expect(find.byIcon(Icons.schedule_send_outlined), findsNothing);
+  });
+
   testWidgets('agent messages render markdown formatting', (
     WidgetTester tester,
   ) async {
@@ -748,6 +777,20 @@ void main() {
     expect(controller.queuedPromptCount, 1);
     controller.cancelPendingPrompt(controller.pendingPrompts.first.id);
     expect(controller.queuedPromptCount, 0);
+  });
+
+  test('queued pending prompts can be promoted to steer mode', () async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
+
+    await controller.sendPrompt('first');
+    await controller.sendPrompt('second');
+
+    final pendingId = controller.pendingPrompts.first.id;
+    final promoted = controller.promotePendingPromptToSteer(pendingId);
+
+    expect(promoted, isTrue);
+    expect(controller.pendingPrompts.first.mode, PendingPromptMode.steer);
   });
 
   test(

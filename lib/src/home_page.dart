@@ -274,6 +274,8 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                           child: _QueuedPromptBar(
                             controller: controller,
                             onEditPrompt: _editPendingPrompt,
+                            onPromotePrompt:
+                                widget.controller.promotePendingPromptToSteer,
                           ),
                         ),
                       SingleChildScrollView(
@@ -1697,10 +1699,12 @@ class _QueuedPromptBar extends StatelessWidget {
   const _QueuedPromptBar({
     required this.controller,
     required this.onEditPrompt,
+    required this.onPromotePrompt,
   });
 
   final AppController controller;
   final ValueChanged<String> onEditPrompt;
+  final ValueChanged<String> onPromotePrompt;
 
   @override
   Widget build(BuildContext context) {
@@ -1722,7 +1726,7 @@ class _QueuedPromptBar extends StatelessWidget {
               children: <Widget>[
                 Icon(
                   item.mode == PendingPromptMode.steer
-                      ? Icons.alt_route_outlined
+                      ? Icons.settings_outlined
                       : Icons.schedule_send_outlined,
                   size: 16,
                   color: theme.colorScheme.onSurfaceVariant,
@@ -1736,6 +1740,23 @@ class _QueuedPromptBar extends StatelessWidget {
                     style: theme.textTheme.bodySmall,
                   ),
                 ),
+                if (item.mode != PendingPromptMode.steer)
+                  IconButton(
+                    key: ValueKey<String>('pending-prompt-promote-${item.id}'),
+                    tooltip: 'Steer',
+                    onPressed: () => onPromotePrompt(item.id),
+                    visualDensity: const VisualDensity(
+                      horizontal: -4,
+                      vertical: -4,
+                    ),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints.tightFor(
+                      width: 28,
+                      height: 28,
+                    ),
+                    splashRadius: 16,
+                    icon: const Icon(Icons.settings_outlined, size: 16),
+                  ),
                 IconButton(
                   tooltip: 'Edit',
                   onPressed: () => onEditPrompt(item.id),
