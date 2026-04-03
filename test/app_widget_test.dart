@@ -439,14 +439,45 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Command Center'), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('command-shell-panel')), findsOneWidget);
+    expect(find.byKey(const ValueKey<String>('command-shell-input')), findsOneWidget);
+    expect(find.text('Shell history'), findsOneWidget);
+    expect(find.text('Setup'), findsOneWidget);
+    expect(find.text('Saved'), findsOneWidget);
     expect(find.text('Buffered'), findsOneWidget);
     expect(find.text('Interactive'), findsOneWidget);
-    expect(find.text('Recent'), findsOneWidget);
-    expect(find.text('Sessions'), findsOneWidget);
-    expect(find.text('Run command'), findsOneWidget);
     expect(find.text('git status'), findsOneWidget);
-    expect(find.text('Clear finished'), findsOneWidget);
-    expect(find.text('Clear all'), findsOneWidget);
+  });
+
+  testWidgets('history repeat copies command into shell when idle', (
+    WidgetTester tester,
+  ) async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
+
+    await controller.startCommandExecution(
+      commandText: 'git status',
+      cwd: '/workspace/project',
+      sandboxMode: SandboxMode.workspaceWrite,
+      allowNetwork: false,
+      mode: CommandSessionMode.buffered,
+      timeoutMs: 60000,
+      disableTimeout: false,
+      outputBytesCap: 32768,
+      disableOutputCap: false,
+    );
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+    await tester.tap(find.byTooltip('Command'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Repeat').first);
+    await tester.pump();
+
+    final shellInput = tester.widget<TextField>(
+      find.byKey(const ValueKey<String>('command-shell-input')),
+    );
+    expect(shellInput.controller?.text, 'git status');
   });
 
   test(

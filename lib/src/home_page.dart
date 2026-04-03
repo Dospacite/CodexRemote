@@ -1152,7 +1152,6 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     _dismissComposerFocus();
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        fullscreenDialog: true,
         builder: (BuildContext context) {
           return CommandCenterPage(controller: widget.controller);
         },
@@ -3889,11 +3888,11 @@ class _AutomationPathPickerPageState extends State<AutomationPathPickerPage> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (BuildContext context, Widget? child) {
         final controller = widget.controller;
+        final theme = Theme.of(context);
         if (_pathController.text != controller.fileBrowserPath &&
             controller.fileBrowserPath.isNotEmpty) {
           _pathController.value = _pathController.value.copyWith(
@@ -4718,7 +4717,6 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
   late final TextEditingController _cwdController;
   late final TextEditingController _timeoutController;
   late final TextEditingController _outputCapController;
-  late final TextEditingController _stdinController;
   late CommandSessionMode _mode;
   late SandboxMode _sandboxMode;
   late bool _allowNetwork;
@@ -4738,7 +4736,6 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
     );
     _timeoutController = TextEditingController(text: '60000');
     _outputCapController = TextEditingController(text: '32768');
-    _stdinController = TextEditingController();
     _mode = CommandSessionMode.buffered;
     _sandboxMode = settings.sandboxMode;
     _allowNetwork = settings.allowNetwork;
@@ -4750,13 +4747,11 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
     _cwdController.dispose();
     _timeoutController.dispose();
     _outputCapController.dispose();
-    _stdinController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (BuildContext context, Widget? child) {
@@ -4767,240 +4762,36 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
             preferredCwd.isNotEmpty) {
           _cwdController.text = preferredCwd;
         }
+        final hasRunningCommand = widget.controller.commandSessions.any(
+          (session) => session.isRunning,
+        );
         return Scaffold(
+          resizeToAvoidBottomInset: false,
           appBar: AppBar(title: const Text('Command Center')),
           body: SafeArea(
             top: false,
             child: Padding(
-              padding: EdgeInsets.only(
-                left: 16,
-                right: 16,
-                top: 12,
-                bottom: MediaQuery.viewInsetsOf(context).bottom + 20,
-              ),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 20),
               child: LayoutBuilder(
                 builder: (BuildContext context, BoxConstraints constraints) {
-                  final setupHeight = constraints.maxHeight < 700
-                      ? constraints.maxHeight * 0.58
-                      : 380.0;
+                  final shellHeight = constraints.maxHeight * 0.6;
                   return Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: <Widget>[
                       SizedBox(
-                        height: setupHeight,
-                        child: SingleChildScrollView(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              _CommandForm(
-                                commandController: _commandController,
-                                cwdController: _cwdController,
-                                timeoutController: _timeoutController,
-                                outputCapController: _outputCapController,
-                                mode: _mode,
-                                sandboxMode: _sandboxMode,
-                                allowNetwork: _allowNetwork,
-                                disableTimeout: _disableTimeout,
-                                disableOutputCap: _disableOutputCap,
-                                onModeChanged: (CommandSessionMode value) {
-                                  setState(() => _mode = value);
-                                },
-                                onSandboxChanged: (SandboxMode value) {
-                                  setState(() => _sandboxMode = value);
-                                },
-                                onAllowNetworkChanged: (bool value) {
-                                  setState(() => _allowNetwork = value);
-                                },
-                                onDisableTimeoutChanged: (bool value) {
-                                  setState(() => _disableTimeout = value);
-                                },
-                                onDisableOutputCapChanged: (bool value) {
-                                  setState(() => _disableOutputCap = value);
-                                },
-                                onRun: _runCommand,
-                              ),
-                              const SizedBox(height: 14),
-                              Row(
-                                children: <Widget>[
-                                  Text(
-                                    'Recent',
-                                    style: theme.textTheme.titleMedium,
-                                  ),
-                                  const Spacer(),
-                                  if (widget
-                                      .controller
-                                      .recentCommands
-                                      .isNotEmpty)
-                                    Text(
-                                      '${widget.controller.recentCommands.length} saved',
-                                      style: theme.textTheme.bodySmall,
-                                    ),
-                                ],
-                              ),
-                              const SizedBox(height: 8),
-                              SizedBox(
-                                height: 132,
-                                child: widget.controller.recentCommands.isEmpty
-                                    ? Container(
-                                        width: double.infinity,
-                                        alignment: Alignment.center,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.surface,
-                                          border: Border.all(
-                                            color: theme.dividerColor,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            10,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          'Recent commands appear here after you run them.',
-                                          style: theme.textTheme.bodySmall,
-                                        ),
-                                      )
-                                    : ListView.separated(
-                                        scrollDirection: Axis.horizontal,
-                                        itemCount: widget
-                                            .controller
-                                            .recentCommands
-                                            .length,
-                                        separatorBuilder: (_, _) =>
-                                            const SizedBox(width: 8),
-                                        itemBuilder:
-                                            (BuildContext context, int index) {
-                                              final recent = widget
-                                                  .controller
-                                                  .recentCommands[index];
-                                              return _RecentCommandCard(
-                                                command: recent,
-                                                onTap: () =>
-                                                    _applyRecentCommand(recent),
-                                                onRemove: () => widget
-                                                    .controller
-                                                    .removeRecentCommand(
-                                                      recent,
-                                                    ),
-                                              );
-                                            },
-                                      ),
-                              ),
-                              const SizedBox(height: 14),
-                              Text(
-                                'Sessions',
-                                style: theme.textTheme.titleMedium,
-                              ),
-                              const SizedBox(height: 8),
-                              Row(
-                                children: <Widget>[
-                                  Text(
-                                    '${widget.controller.commandSessions.length} total',
-                                    style: theme.textTheme.bodySmall,
-                                  ),
-                                  const Spacer(),
-                                  TextButton(
-                                    onPressed:
-                                        widget.controller.commandSessions.any(
-                                          (session) => !session.isRunning,
-                                        )
-                                        ? widget
-                                              .controller
-                                              .clearFinishedCommandSessions
-                                        : null,
-                                    child: const Text('Clear finished'),
-                                  ),
-                                  TextButton(
-                                    onPressed:
-                                        widget
-                                            .controller
-                                            .commandSessions
-                                            .isNotEmpty
-                                        ? widget
-                                              .controller
-                                              .clearAllCommandSessions
-                                        : null,
-                                    child: const Text('Clear all'),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(
-                                height: 112,
-                                child: widget.controller.commandSessions.isEmpty
-                                    ? Container(
-                                        width: double.infinity,
-                                        alignment: Alignment.center,
-                                        decoration: BoxDecoration(
-                                          color: theme.colorScheme.surface,
-                                          border: Border.all(
-                                            color: theme.dividerColor,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            10,
-                                          ),
-                                        ),
-                                        child: Text(
-                                          'No command sessions yet.',
-                                          style: theme.textTheme.bodySmall,
-                                        ),
-                                      )
-                                    : ListView.separated(
-                                        scrollDirection: Axis.horizontal,
-                                        itemCount: widget
-                                            .controller
-                                            .commandSessions
-                                            .length,
-                                        separatorBuilder: (_, _) =>
-                                            const SizedBox(width: 8),
-                                        itemBuilder:
-                                            (BuildContext context, int index) {
-                                              final session = widget
-                                                  .controller
-                                                  .commandSessions[index];
-                                              final selected =
-                                                  widget
-                                                      .controller
-                                                      .activeCommandSession
-                                                      ?.id ==
-                                                  session.id;
-                                              return _CommandSessionCard(
-                                                session: session,
-                                                selected: selected,
-                                                onTap: () => widget.controller
-                                                    .selectCommandSession(
-                                                      session.id,
-                                                    ),
-                                              );
-                                            },
-                                      ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 14),
-                      Expanded(
-                        child: activeSession == null
-                            ? Container(
-                                width: double.infinity,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: theme.colorScheme.surface,
-                                  border: Border.all(color: theme.dividerColor),
-                                  borderRadius: BorderRadius.circular(10),
+                        height: shellHeight,
+                        child: _CommandSessionView(
+                          session: activeSession,
+                          commandController: _commandController,
+                          onSubmit: _submitShellInput,
+                          onTerminate: activeSession == null
+                              ? null
+                              : () => widget.controller.terminateCommandSession(
+                                  activeSession.id,
                                 ),
-                                child: Text(
-                                  'Run a command to start a session.',
-                                  style: theme.textTheme.bodyMedium,
-                                ),
-                              )
-                            : _CommandSessionView(
-                                session: activeSession,
-                                stdinController: _stdinController,
-                                onSendInput: _sendCommandInput,
-                                onCloseStdin: () => widget.controller
-                                    .closeCommandSessionStdin(activeSession.id),
-                                onTerminate: () => widget.controller
-                                    .terminateCommandSession(activeSession.id),
-                                onResize: (int rows, int cols) {
+                          onResize: activeSession == null
+                              ? null
+                              : (int rows, int cols) {
                                   if (_lastRows == rows && _lastCols == cols) {
                                     return;
                                   }
@@ -5012,7 +4803,69 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
                                     cols: cols,
                                   );
                                 },
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      Expanded(
+                        child: Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: _CommandHistoryPanel(
+                                controller: widget.controller,
+                                canRepeat:
+                                    _commandController.text.trim().isEmpty &&
+                                    !hasRunningCommand,
+                                onRepeat: _repeatCommandFromHistory,
                               ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: <Widget>[
+                                    _CommandForm(
+                                      cwdController: _cwdController,
+                                      timeoutController: _timeoutController,
+                                      outputCapController:
+                                          _outputCapController,
+                                      mode: _mode,
+                                      sandboxMode: _sandboxMode,
+                                      allowNetwork: _allowNetwork,
+                                      disableTimeout: _disableTimeout,
+                                      disableOutputCap: _disableOutputCap,
+                                      onModeChanged:
+                                          (CommandSessionMode value) {
+                                            setState(() => _mode = value);
+                                          },
+                                      onSandboxChanged: (SandboxMode value) {
+                                        setState(() => _sandboxMode = value);
+                                      },
+                                      onAllowNetworkChanged: (bool value) {
+                                        setState(() => _allowNetwork = value);
+                                      },
+                                      onDisableTimeoutChanged: (bool value) {
+                                        setState(
+                                          () => _disableTimeout = value,
+                                        );
+                                      },
+                                      onDisableOutputCapChanged: (bool value) {
+                                        setState(
+                                          () => _disableOutputCap = value,
+                                        );
+                                      },
+                                    ),
+                                    const SizedBox(height: 12),
+                                    _SavedCommandPanel(
+                                      controller: widget.controller,
+                                      onTapCommand: _applyRecentCommand,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   );
@@ -5041,17 +4894,27 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
       rows: 24,
       cols: 96,
     );
-    _stdinController.clear();
+    _commandController.clear();
   }
 
-  Future<void> _sendCommandInput() async {
+  Future<void> _sendCommandInput(CommandSession session) async {
+    final text = _commandController.text;
+    _commandController.clear();
+    await widget.controller.writeToCommandSession(session.id, '$text\n');
+  }
+
+  Future<void> _submitShellInput() async {
     final session = widget.controller.activeCommandSession;
-    if (session == null) {
+    final canSendToInteractive =
+        session != null &&
+        session.isInteractive &&
+        session.isRunning &&
+        !session.stdinClosed;
+    if (canSendToInteractive) {
+      await _sendCommandInput(session);
       return;
     }
-    final text = _stdinController.text;
-    _stdinController.clear();
-    await widget.controller.writeToCommandSession(session.id, '$text\n');
+    await _runCommand();
   }
 
   void _applyRecentCommand(RecentCommand recent) {
@@ -5067,11 +4930,26 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
       _disableOutputCap = recent.disableOutputCap;
     });
   }
+
+  void _repeatCommandFromHistory(CommandSession session) {
+    if (_commandController.text.trim().isNotEmpty) {
+      return;
+    }
+    if (widget.controller.commandSessions.any((item) => item.isRunning)) {
+      return;
+    }
+    final command = session.commandDisplay.trim();
+    if (command.isEmpty) {
+      return;
+    }
+    _commandController
+      ..text = command
+      ..selection = TextSelection.collapsed(offset: command.length);
+  }
 }
 
 class _CommandForm extends StatelessWidget {
   const _CommandForm({
-    required this.commandController,
     required this.cwdController,
     required this.timeoutController,
     required this.outputCapController,
@@ -5085,10 +4963,8 @@ class _CommandForm extends StatelessWidget {
     required this.onAllowNetworkChanged,
     required this.onDisableTimeoutChanged,
     required this.onDisableOutputCapChanged,
-    required this.onRun,
   });
 
-  final TextEditingController commandController;
   final TextEditingController cwdController;
   final TextEditingController timeoutController;
   final TextEditingController outputCapController;
@@ -5102,7 +4978,6 @@ class _CommandForm extends StatelessWidget {
   final ValueChanged<bool> onAllowNetworkChanged;
   final ValueChanged<bool> onDisableTimeoutChanged;
   final ValueChanged<bool> onDisableOutputCapChanged;
-  final VoidCallback onRun;
 
   @override
   Widget build(BuildContext context) {
@@ -5116,6 +4991,8 @@ class _CommandForm extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
+          Text('Setup', style: Theme.of(context).textTheme.titleMedium),
+          const SizedBox(height: 12),
           SegmentedButton<CommandSessionMode>(
             segments: const <ButtonSegment<CommandSessionMode>>[
               ButtonSegment<CommandSessionMode>(
@@ -5131,14 +5008,6 @@ class _CommandForm extends StatelessWidget {
             onSelectionChanged: (Set<CommandSessionMode> selection) {
               onModeChanged(selection.first);
             },
-          ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: commandController,
-            decoration: const InputDecoration(
-              labelText: 'Command',
-              hintText: 'Runs as /bin/bash -lc "<command>"',
-            ),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -5195,15 +5064,8 @@ class _CommandForm extends StatelessWidget {
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(labelText: 'Output cap bytes'),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
           ],
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              onPressed: onRun,
-              child: const Text('Run command'),
-            ),
-          ),
         ],
       ),
     );
@@ -5215,48 +5077,74 @@ class _CommandSessionCard extends StatelessWidget {
     required this.session,
     required this.selected,
     required this.onTap,
+    required this.canRepeat,
+    required this.onRepeat,
   });
 
   final CommandSession session;
   final bool selected;
   final VoidCallback onTap;
+  final bool canRepeat;
+  final VoidCallback onRepeat;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
       child: Container(
-        width: 220,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
+          color: selected
+              ? theme.colorScheme.primary.withValues(alpha: 0.08)
+              : theme.colorScheme.surface,
           border: Border.all(
             color: selected ? theme.colorScheme.primary : theme.dividerColor,
           ),
           borderRadius: BorderRadius.circular(10),
         ),
-        child: Column(
+        child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(
-              session.commandDisplay,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleMedium,
-            ),
-            const Spacer(),
-            Text(
-              '${session.mode.name} • ${session.statusLabel}',
-              style: theme.textTheme.bodySmall,
-            ),
-            if (session.cwd.isNotEmpty)
-              Text(
-                session.cwd,
-                style: theme.textTheme.bodySmall,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+            IconButton(
+              tooltip: 'Repeat',
+              onPressed: canRepeat ? onRepeat : null,
+              visualDensity: const VisualDensity(
+                horizontal: -4,
+                vertical: -4,
               ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+              splashRadius: 16,
+              icon: const Icon(Icons.replay, size: 16),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    session.commandDisplay,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${session.mode.name} • ${session.statusLabel}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  if (session.cwd.isNotEmpty)
+                    Text(
+                      session.cwd,
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                ],
+              ),
+            ),
           ],
         ),
       ),
@@ -5280,53 +5168,53 @@ class _RecentCommandCard extends StatelessWidget {
     final theme = Theme.of(context);
     return InkWell(
       onTap: onTap,
+      borderRadius: BorderRadius.circular(10),
       child: Container(
-        width: 240,
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
           color: theme.colorScheme.surface,
           border: Border.all(color: theme.dividerColor),
           borderRadius: BorderRadius.circular(10),
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: <Widget>[
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
                     command.commandText,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: theme.textTheme.titleMedium,
+                    style: theme.textTheme.titleSmall,
                   ),
-                ),
-                GestureDetector(
-                  onTap: onRemove,
-                  child: Padding(
-                    padding: const EdgeInsets.all(4),
-                    child: Icon(
-                      Icons.close,
-                      size: 16,
-                      color: theme.textTheme.bodySmall?.color,
+                  const SizedBox(height: 6),
+                  Text(
+                    '${command.mode.name} • ${command.sandboxMode.name}',
+                    style: theme.textTheme.bodySmall,
+                  ),
+                  if (command.cwd.isNotEmpty)
+                    Text(
+                      command.cwd,
+                      style: theme.textTheme.bodySmall,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '${command.mode.name} • ${command.sandboxMode.name}',
-              style: theme.textTheme.bodySmall,
-            ),
-            if (command.cwd.isNotEmpty)
-              Text(
-                command.cwd,
-                style: theme.textTheme.bodySmall,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                ],
               ),
+            ),
+            IconButton(
+              tooltip: 'Remove saved command',
+              onPressed: onRemove,
+              visualDensity: const VisualDensity(
+                horizontal: -4,
+                vertical: -4,
+              ),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+              splashRadius: 16,
+              icon: const Icon(Icons.close, size: 16),
+            ),
           ],
         ),
       ),
@@ -5337,19 +5225,17 @@ class _RecentCommandCard extends StatelessWidget {
 class _CommandSessionView extends StatefulWidget {
   const _CommandSessionView({
     required this.session,
-    required this.stdinController,
-    required this.onSendInput,
-    required this.onCloseStdin,
+    required this.commandController,
+    required this.onSubmit,
     required this.onTerminate,
     required this.onResize,
   });
 
-  final CommandSession session;
-  final TextEditingController stdinController;
-  final VoidCallback onSendInput;
-  final VoidCallback onCloseStdin;
-  final VoidCallback onTerminate;
-  final void Function(int rows, int cols) onResize;
+  final CommandSession? session;
+  final TextEditingController commandController;
+  final Future<void> Function() onSubmit;
+  final VoidCallback? onTerminate;
+  final void Function(int rows, int cols)? onResize;
 
   @override
   State<_CommandSessionView> createState() => _CommandSessionViewState();
@@ -5370,58 +5256,59 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
   Widget build(BuildContext context) {
     final session = widget.session;
     final theme = Theme.of(context);
+    final interactiveInput =
+        session != null &&
+        session.isInteractive &&
+        session.isRunning &&
+        !session.stdinClosed;
     return Container(
+      key: const ValueKey<String>('command-shell-panel'),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
-        border: Border.all(color: theme.dividerColor),
+        color: const Color(0xFF101315),
+        border: Border.all(color: theme.colorScheme.outlineVariant),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
         children: <Widget>[
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
               children: <Widget>[
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: <Widget>[
-                          Text(
-                            session.commandDisplay,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.titleMedium,
-                          ),
-                          if (session.cwd.isNotEmpty) ...<Widget>[
-                            const SizedBox(height: 4),
-                            Text(
-                              session.cwd,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: theme.textTheme.bodySmall,
-                            ),
-                          ],
-                        ],
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        session?.commandDisplay ?? 'Shell',
+                        key: const ValueKey<String>('command-shell-title'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: const Color(0xFFE8F0EB),
+                          fontFamily: 'monospace',
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton(
-                      onPressed: session.isRunning ? widget.onTerminate : null,
-                      child: const Text('Terminate'),
-                    ),
-                  ],
+                      const SizedBox(height: 4),
+                      Text(
+                        session?.cwd.isNotEmpty == true
+                            ? session!.cwd
+                            : 'Ready for a command',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: const Color(0xFF8EAAA0),
+                          fontFamily: 'monospace',
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                if (session.outputCapReached)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      'Output cap reached',
-                      style: theme.textTheme.bodySmall,
-                    ),
+                if (widget.onTerminate != null)
+                  OutlinedButton(
+                    onPressed: session?.isRunning == true
+                        ? widget.onTerminate
+                        : null,
+                    child: const Text('Terminate'),
                   ),
               ],
             ),
@@ -5432,10 +5319,12 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                 final rows = (constraints.maxHeight / 18).floor().clamp(10, 60);
                 final cols = (constraints.maxWidth / 8).floor().clamp(40, 160);
                 WidgetsBinding.instance.addPostFrameCallback((_) {
-                  if (session.isInteractive &&
+                  if (session != null &&
+                      session.isInteractive &&
                       session.usesTty &&
-                      session.isRunning) {
-                    widget.onResize(rows, cols);
+                      session.isRunning &&
+                      widget.onResize != null) {
+                    widget.onResize!(rows, cols);
                   }
                 });
                 return Scrollbar(
@@ -5461,32 +5350,57 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: <Widget>[
-                              if (session.stdout.isNotEmpty)
+                              if (session != null &&
+                                  session.stdout.isNotEmpty)
                                 _MonospaceOutputView(
                                   text: session.stdout,
                                   scrollable: false,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: theme.colorScheme.onSurface,
+                                    color: const Color(0xFFE8F0EB),
                                     height: 1.2,
                                   ),
                                 ),
-                              if (session.stdout.isEmpty &&
+                              if (session == null)
+                                Text(
+                                  '\$ Run a command to start a shell session.',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    fontFamily: 'monospace',
+                                    color: const Color(0xFF8EAAA0),
+                                  ),
+                                ),
+                              if (session != null &&
+                                  session.stdout.isEmpty &&
                                   session.stderr.isEmpty)
                                 Text(
                                   session.isRunning
                                       ? 'Waiting for output...'
                                       : 'Command produced no output.',
-                                  style: theme.textTheme.bodySmall,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    fontFamily: 'monospace',
+                                    color: const Color(0xFF8EAAA0),
+                                  ),
                                 ),
-                              if (session.stderr.isNotEmpty) ...<Widget>[
+                              if (session != null &&
+                                  session.outputCapReached) ...<Widget>[
+                                const SizedBox(height: 10),
+                                Text(
+                                  'Output cap reached',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    fontFamily: 'monospace',
+                                    color: const Color(0xFFF3C677),
+                                  ),
+                                ),
+                              ],
+                              if (session != null &&
+                                  session.stderr.isNotEmpty) ...<Widget>[
                                 const SizedBox(height: 10),
                                 _MonospaceOutputView(
                                   text: session.stderr,
                                   scrollable: false,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: theme.colorScheme.error,
+                                    color: const Color(0xFFF5A29B),
                                     height: 1.2,
                                   ),
                                 ),
@@ -5501,40 +5415,193 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
               },
             ),
           ),
-          if (session.isInteractive) ...<Widget>[
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-              child: Row(
-                children: <Widget>[
-                  Expanded(
-                    child: TextField(
-                      controller: widget.stdinController,
-                      enabled: session.isRunning && !session.stdinClosed,
-                      decoration: InputDecoration(
-                        hintText: session.stdinClosed
-                            ? 'stdin closed'
-                            : 'Send input to session',
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: Row(
+              children: <Widget>[
+                const Text(
+                  '\$',
+                  style: TextStyle(
+                    fontFamily: 'monospace',
+                    color: Color(0xFF8EE6A2),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextField(
+                    key: const ValueKey<String>('command-shell-input'),
+                    controller: widget.commandController,
+                    onSubmitted: (_) => widget.onSubmit(),
+                    decoration: InputDecoration(
+                      hintText: interactiveInput
+                          ? 'Send input to session'
+                          : 'Write a shell command',
+                      hintStyle: theme.textTheme.bodySmall?.copyWith(
+                        color: const Color(0xFF6E8A80),
+                      ),
+                      filled: true,
+                      fillColor: const Color(0xFF171B1E),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF2B3439),
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF2B3439),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(
+                          color: Color(0xFF8EE6A2),
+                        ),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 12,
                       ),
                     ),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      color: Color(0xFFE8F0EB),
+                    ),
                   ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: session.isRunning && !session.stdinClosed
-                        ? widget.onSendInput
-                        : null,
-                    child: const Text('Send'),
-                  ),
-                  const SizedBox(width: 8),
-                  OutlinedButton(
-                    onPressed: session.isRunning && !session.stdinClosed
-                        ? widget.onCloseStdin
-                        : null,
-                    child: const Text('Close stdin'),
-                  ),
-                ],
-              ),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: widget.onSubmit,
+                  child: Text(interactiveInput ? 'Send' : 'Run'),
+                ),
+              ],
             ),
-          ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommandHistoryPanel extends StatelessWidget {
+  const _CommandHistoryPanel({
+    required this.controller,
+    required this.canRepeat,
+    required this.onRepeat,
+  });
+
+  final AppController controller;
+  final bool canRepeat;
+  final ValueChanged<CommandSession> onRepeat;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Text('Shell history', style: theme.textTheme.titleMedium),
+              const Spacer(),
+              if (controller.commandSessions.isNotEmpty)
+                Text(
+                  '${controller.commandSessions.length}',
+                  style: theme.textTheme.bodySmall,
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: controller.commandSessions.isEmpty
+                ? Center(
+                    child: Text(
+                      'No shell commands yet.',
+                      style: theme.textTheme.bodySmall,
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: controller.commandSessions.length,
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
+                    itemBuilder: (BuildContext context, int index) {
+                      final session = controller.commandSessions[index];
+                      final selected =
+                          controller.activeCommandSession?.id == session.id;
+                      return _CommandSessionCard(
+                        session: session,
+                        selected: selected,
+                        canRepeat: canRepeat,
+                        onRepeat: () => onRepeat(session),
+                        onTap: () => controller.selectCommandSession(session.id),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SavedCommandPanel extends StatelessWidget {
+  const _SavedCommandPanel({
+    required this.controller,
+    required this.onTapCommand,
+  });
+
+  final AppController controller;
+  final ValueChanged<RecentCommand> onTapCommand;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        border: Border.all(color: theme.dividerColor),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Text('Saved', style: theme.textTheme.titleMedium),
+              const Spacer(),
+              if (controller.recentCommands.isNotEmpty)
+                Text(
+                  '${controller.recentCommands.length}',
+                  style: theme.textTheme.bodySmall,
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (controller.recentCommands.isEmpty)
+            Text(
+              'Saved commands appear here after you run them.',
+              style: theme.textTheme.bodySmall,
+            )
+          else
+            ...controller.recentCommands.map((recent) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _RecentCommandCard(
+                  command: recent,
+                  onTap: () => onTapCommand(recent),
+                  onRemove: () => controller.removeRecentCommand(recent),
+                ),
+              );
+            }),
         ],
       ),
     );
