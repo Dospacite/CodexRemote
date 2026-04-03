@@ -89,6 +89,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   String? filePreviewSaveError;
   String? modelListError;
   String? rateLimitSummary;
+  List<String> rateLimitResetDetails = const <String>[];
   String? contextWindowSummary;
   int? contextUsagePercent;
   String? _threadHistoryCursor;
@@ -170,6 +171,8 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     final value = rateLimitSummary?.trim() ?? '';
     return value.isEmpty ? null : value;
   }
+
+  bool get hasRateLimitResetDetails => rateLimitResetDetails.isNotEmpty;
 
   String? get composerMetaRightText {
     final value = contextWindowSummary?.trim() ?? '';
@@ -3042,8 +3045,10 @@ while not server.served and time.time() < deadline:
       );
       final snapshot = _selectRateLimitSnapshot(rateResponse);
       rateLimitSummary = _formatRateLimitSummary(snapshot);
+      rateLimitResetDetails = _formatRateLimitResetDetails(snapshot);
     } catch (_) {
       rateLimitSummary = null;
+      rateLimitResetDetails = const <String>[];
     }
 
     try {
@@ -3469,6 +3474,7 @@ while not server.served and time.time() < deadline:
       case 'account/rateLimits/updated':
         final snapshot = _selectRateLimitSnapshot(typedParams);
         rateLimitSummary = _formatRateLimitSummary(snapshot);
+        rateLimitResetDetails = _formatRateLimitResetDetails(snapshot);
         notifyListeners();
       case 'thread/tokenUsage/updated':
         final threadId = typedParams['threadId']?.toString() ?? '';
@@ -3824,6 +3830,28 @@ while not server.served and time.time() < deadline:
     return segments.join(' • ');
   }
 
+  List<String> _formatRateLimitResetDetails(Map<String, dynamic>? snapshot) {
+    if (snapshot == null) {
+      return const <String>[];
+    }
+    final details = <String>[];
+    final primary = snapshot['primary'];
+    if (primary is Map<String, dynamic>) {
+      final detail = _formatRateLimitResetDetail(primary);
+      if (detail != null) {
+        details.add(detail);
+      }
+    }
+    final secondary = snapshot['secondary'];
+    if (secondary is Map<String, dynamic>) {
+      final detail = _formatRateLimitResetDetail(secondary);
+      if (detail != null) {
+        details.add(detail);
+      }
+    }
+    return details;
+  }
+
   String? _formatRateLimitWindow(Map<String, dynamic> window) {
     final usedPercent = _parsePositiveInt(window['usedPercent']);
     if (usedPercent == null) {
@@ -3835,6 +3863,15 @@ while not server.served and time.time() < deadline:
     return durationLabel == null
         ? '$remaining% left'
         : '$durationLabel $remaining% left';
+  }
+
+  String? _formatRateLimitResetDetail(Map<String, dynamic> window) {
+    final durationLabel = _formatWindowDuration(window['windowDurationMins']);
+    final resetAt = _parseRateLimitResetAt(window);
+    if (durationLabel == null || resetAt == null) {
+      return null;
+    }
+    return '$durationLabel resets ${_formatRateLimitResetAt(resetAt)}';
   }
 
   (String?, int?) _contextStateFromConfig(Map<String, dynamic> config) {
@@ -3891,6 +3928,51 @@ while not server.served and time.time() < deadline:
     return null;
   }
 
+  DateTime? _parseRateLimitResetAt(Map<String, dynamic> window) {
+    const candidates = <String>[
+      'resetsAt',
+      'resetAt',
+      'resetsAtIso',
+      'resetAtIso',
+      'resetsAtUnixMs',
+      'resetAtUnixMs',
+      'resetsAtMs',
+      'resetAtMs',
+      'resetsAtUnix',
+      'resetAtUnix',
+    ];
+    for (final key in candidates) {
+      final value = window[key];
+      if (value == null) {
+        continue;
+      }
+      if (value is String) {
+        final parsed = DateTime.tryParse(value.trim());
+        if (parsed != null) {
+          return parsed.toLocal();
+        }
+        final asInt = int.tryParse(value.trim());
+        if (asInt != null) {
+          return _dateTimeFromEpochGuess(asInt);
+        }
+      }
+      if (value is int) {
+        return _dateTimeFromEpochGuess(value);
+      }
+      if (value is num) {
+        return _dateTimeFromEpochGuess(value.round());
+      }
+    }
+    return null;
+  }
+
+  DateTime _dateTimeFromEpochGuess(int value) {
+    final isMilliseconds = value.abs() >= 100000000000;
+    return isMilliseconds
+        ? DateTime.fromMillisecondsSinceEpoch(value).toLocal()
+        : DateTime.fromMillisecondsSinceEpoch(value * 1000).toLocal();
+  }
+
   String? _formatWindowDuration(dynamic minutesValue) {
     if (minutesValue is! int || minutesValue <= 0) {
       return null;
@@ -3902,6 +3984,28 @@ while not server.served and time.time() < deadline:
       return '${minutesValue ~/ 60}h';
     }
     return '${minutesValue}m';
+  }
+
+  String _formatRateLimitResetAt(DateTime value) {
+    const monthNames = <String>[
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    final month = monthNames[value.month - 1];
+    final day = value.day.toString().padLeft(2, '0');
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '$month $day, $hour:$minute';
   }
 
   String _formatTokenCount(int value) {

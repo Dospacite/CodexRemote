@@ -113,6 +113,42 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     super.dispose();
   }
 
+  Future<void> _showRateLimitMenu(
+    BuildContext context,
+    AppController controller,
+  ) async {
+    if (!controller.hasRateLimitResetDetails) {
+      return;
+    }
+    final box = context.findRenderObject();
+    final overlay = Overlay.of(context).context.findRenderObject();
+    if (box is! RenderBox || overlay is! RenderBox) {
+      return;
+    }
+    final topLeft = box.localToGlobal(Offset.zero, ancestor: overlay);
+    final bottomRight = box.localToGlobal(
+      box.size.bottomRight(Offset.zero),
+      ancestor: overlay,
+    );
+    final position = RelativeRect.fromRect(
+      Rect.fromPoints(topLeft, bottomRight),
+      Offset.zero & overlay.size,
+    );
+    await showMenu<void>(
+      context: context,
+      position: position,
+      items: controller.rateLimitResetDetails
+          .map(
+            (detail) => PopupMenuItem<void>(
+              enabled: false,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Text(detail),
+            ),
+          )
+          .toList(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final controller = widget.controller;
@@ -332,22 +368,49 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                                   Row(
                                     children: <Widget>[
                                       Expanded(
-                                        child: Text(
-                                          controller.composerMetaLeftText ?? '',
-                                          key: const ValueKey<String>(
-                                            'composer-meta-left-text',
-                                          ),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                          textAlign: TextAlign.left,
-                                          style: theme.textTheme.bodySmall
-                                              ?.copyWith(
-                                                fontSize: 10,
-                                                height: 1.1,
-                                                color: theme
-                                                    .colorScheme
-                                                    .onSurfaceVariant,
+                                        child: Builder(
+                                          builder: (BuildContext context) {
+                                            final text = Text(
+                                              controller.composerMetaLeftText ??
+                                                  '',
+                                              key: const ValueKey<String>(
+                                                'composer-meta-left-text',
                                               ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              textAlign: TextAlign.left,
+                                              style: theme.textTheme.bodySmall
+                                                  ?.copyWith(
+                                                    fontSize: 10,
+                                                    height: 1.1,
+                                                    color: theme
+                                                        .colorScheme
+                                                        .onSurfaceVariant,
+                                                  ),
+                                            );
+                                            if (!controller
+                                                .hasRateLimitResetDetails) {
+                                              return text;
+                                            }
+                                            return InkWell(
+                                              key: const ValueKey<String>(
+                                                'composer-meta-left-button',
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(6),
+                                              onTap: () => _showRateLimitMenu(
+                                                context,
+                                                controller,
+                                              ),
+                                              child: Padding(
+                                                padding:
+                                                    const EdgeInsets.symmetric(
+                                                      vertical: 2,
+                                                    ),
+                                                child: text,
+                                              ),
+                                            );
+                                          },
                                         ),
                                       ),
                                       if (controller.composerMetaRightText !=

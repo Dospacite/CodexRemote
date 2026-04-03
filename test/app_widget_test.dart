@@ -45,6 +45,10 @@ void main() {
       ),
     );
     controller.rateLimitSummary = '1h 77% left • 1d 42% left';
+    controller.rateLimitResetDetails = <String>[
+      '5h resets Apr 03, 14:30',
+      '7d resets Apr 10, 09:00',
+    ];
     controller.contextWindowSummary = '75% ctx';
     controller.contextUsagePercent = 75;
     controller.modelOptions.add(
@@ -94,6 +98,27 @@ void main() {
     expect(find.textContaining('Server:'), findsNothing);
     expect(find.textContaining('Thread:'), findsNothing);
     expect(find.textContaining('Mode:'), findsNothing);
+  });
+
+  testWidgets('tapping rate limits opens reset menu', (
+    WidgetTester tester,
+  ) async {
+    final controller = AppController.testing();
+    controller.rateLimitSummary = '5h 77% left • 7d 42% left';
+    controller.rateLimitResetDetails = <String>[
+      '5h resets Apr 03, 14:30',
+      '7d resets Apr 10, 09:00',
+    ];
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+
+    await tester.tap(
+      find.byKey(const ValueKey<String>('composer-meta-left-button')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('5h resets Apr 03, 14:30'), findsOneWidget);
+    expect(find.text('7d resets Apr 10, 09:00'), findsOneWidget);
   });
 
   testWidgets('agent messages render markdown formatting', (
@@ -1291,6 +1316,7 @@ void main() {
       await controller.connect();
 
       expect(controller.rateLimitSummary, '1h 77% left • 1d 42% left');
+      expect(controller.rateLimitResetDetails, isEmpty);
       expect(controller.contextWindowSummary, '128k window');
       expect(controller.contextUsagePercent, isNull);
       expect(controller.composerMetaLeftText, '1h 77% left • 1d 42% left');
