@@ -22,6 +22,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 
 class CodexForegroundService : Service() {
+    private val mainHandler = Handler(Looper.getMainLooper())
     private val client by lazy {
         OkHttpClient.Builder()
             .pingInterval(20, TimeUnit.SECONDS)
@@ -33,7 +34,16 @@ class CodexForegroundService : Service() {
     private var currentUrl: String? = null
     private var currentBearerToken: String? = null
     private var isSocketOpen: Boolean = false
+    private var shouldReconnect: Boolean = false
+    private var reconnectAttempt: Int = 0
     private val pendingMessages = ConcurrentLinkedQueue<String>()
+    private val reconnectRunnable = Runnable {
+        val url = currentUrl
+        if (!shouldReconnect || url.isNullOrBlank()) {
+            return@Runnable
+        }
+        connect(url, currentBearerToken)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,6 +75,7 @@ class CodexForegroundService : Service() {
                 val url = intent.getStringExtra(EXTRA_URL)
                 val bearerToken = intent.getStringExtra(EXTRA_BEARER_TOKEN)
                 if (!url.isNullOrBlank()) {
+                    shouldReconnect = true
                     connect(url, bearerToken)
                 }
             }
@@ -88,6 +99,7 @@ class CodexForegroundService : Service() {
 
     private fun connect(url: String, bearerToken: String?) {
         val normalizedToken = bearerToken?.trim()?.takeIf { it.isNotEmpty() }
+        mainHandler.removeCallbacks(reconnectRunnable)
         if (currentUrl == url && currentBearerToken == normalizedToken && socket != null) {
             updateNotification(
                 "Codex Remote",
@@ -115,6 +127,7 @@ class CodexForegroundService : Service() {
                         return
                     }
                     isSocketOpen = true
+                    reconnectAttempt = 0
                     flushPendingMessages(webSocket)
                     CodexServiceBridge.pushEvent(
                         """{"method":"android/transportStatus","params":{"status":"connected","url":${url.quoteJson()}}}"""
@@ -139,6 +152,7 @@ class CodexForegroundService : Service() {
                         """{"method":"android/transportStatus","params":{"status":"disconnected","code":$code,"reason":${reason.quoteJson()}}}"""
                     )
                     updateNotification("Codex Remote", "Disconnected")
+                    scheduleReconnect("Socket closed")
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -152,6 +166,7 @@ class CodexForegroundService : Service() {
                         """{"method":"android/transportStatus","params":{"status":"error","message":${message.quoteJson()}}}"""
                     )
                     updateNotification("Codex Remote", "Connection error")
+                    scheduleReconnect(message)
                 }
             }
         )
@@ -160,11 +175,14 @@ class CodexForegroundService : Service() {
     }
 
     private fun disconnect(stopService: Boolean) {
+        shouldReconnect = false
+        mainHandler.removeCallbacks(reconnectRunnable)
         socket?.close(1000, "disconnect")
         socket = null
         isSocketOpen = false
         currentUrl = null
         currentBearerToken = null
+        reconnectAttempt = 0
         pendingMessages.clear()
         updateNotification("Codex Remote", "Disconnected")
         if (stopService) {
@@ -191,6 +209,22 @@ class CodexForegroundService : Service() {
                 break
             }
         }
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        if (!shouldReconnect || currentUrl.isNullOrBlank()) {
+            return
+        }
+        reconnectAttempt += 1
+        val delayMs = when {
+            reconnectAttempt <= 1 -> 1_000L
+            reconnectAttempt == 2 -> 2_000L
+            reconnectAttempt == 3 -> 5_000L
+            else -> 10_000L
+        }
+        updateNotification("Codex Remote", "Reconnecting: $reason")
+        mainHandler.removeCallbacks(reconnectRunnable)
+        mainHandler.postDelayed(reconnectRunnable, delayMs)
     }
 
     private fun updateNotification(title: String, text: String) {
