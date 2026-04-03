@@ -1168,6 +1168,27 @@ void main() {
     }
   });
 
+  test('relay connections report the relay endpoint in the status log', () async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
+    await controller.saveSettings(
+      controller.settings.copyWith(
+        connectionMode: ConnectionMode.relay,
+        relayUrl: 'https://relay.example.com',
+      ),
+    );
+
+    await controller.connect();
+
+    expect(controller.status, ConnectionStatus.ready);
+    expect(
+      controller.entries.any(
+        (entry) => entry.body == 'Connected to https://relay.example.com.',
+      ),
+      isTrue,
+    );
+  });
+
   testWidgets(
     'file preview opens as a full-screen route from the file browser',
     (WidgetTester tester) async {

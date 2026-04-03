@@ -112,6 +112,16 @@ class AppSettings {
     };
   }
 
+  String get activeConnectionLabel {
+    if (connectionMode == ConnectionMode.relay) {
+      final relay = relayUrl.trim();
+      if (relay.isNotEmpty) {
+        return relay;
+      }
+    }
+    return serverUrl.trim();
+  }
+
   AppSettings copyWith({
     ConnectionMode? connectionMode,
     String? serverUrl,

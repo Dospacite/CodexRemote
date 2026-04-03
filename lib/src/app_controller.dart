@@ -391,7 +391,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       status = ConnectionStatus.ready;
       statusMessage = 'Ready';
       _shouldReconnectOnResume = true;
-      _addSystemEntry('Connected to ${_settings.serverUrl}.');
+      _addSystemEntry('Connected to ${_settings.activeConnectionLabel}.');
       await _refreshUsageMetadata(notify: false);
       await loadModelOptions(force: true);
       await _syncAutomationWatches();
