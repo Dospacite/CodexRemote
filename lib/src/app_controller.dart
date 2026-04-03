@@ -95,7 +95,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   String? _threadHistoryCursor;
   String? activeCommandSessionId;
   bool isSteering = false;
-  String? _completedFinalAnswerTurnId;
   String fileBrowserPath = '';
   String? selectedFilePath;
   String? selectedFileContent;
@@ -165,8 +164,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   int get queuedPromptCount => pendingPrompts.length;
   List<String> get queuedPrompts =>
       pendingPrompts.map((item) => item.text).toList();
-  bool get _canStartNextTurnAfterFinalAnswer =>
-      activeTurnId != null && _completedFinalAnswerTurnId == activeTurnId;
   String? get composerMetaLeftText {
     final value = rateLimitSummary?.trim() ?? '';
     return value.isEmpty ? null : value;
@@ -336,7 +333,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     activeTurnId = null;
     contextUsagePercent = null;
     isSteering = false;
-    _completedFinalAnswerTurnId = null;
     entries.clear();
     approvals.clear();
     _entryByItemId.clear();
@@ -428,7 +424,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     status = ConnectionStatus.disconnected;
     statusMessage = 'Disconnected';
     activeTurnId = null;
-    _completedFinalAnswerTurnId = null;
     openingThreadId = null;
     _subscribedThreadId = null;
     rateLimitSummary = null;
@@ -2233,7 +2228,7 @@ print(json.dumps({"entries": entries}))
     if (activeThreadId == null || activeThreadId!.trim().isEmpty) {
       throw StateError('No active thread is available.');
     }
-    if (hasActiveTurn && !_canStartNextTurnAfterFinalAnswer) {
+    if (hasActiveTurn) {
       _enqueuePendingPrompt(messageText, PendingPromptMode.queued);
       return;
     }
@@ -2714,10 +2709,6 @@ while not server.served and time.time() < deadline:
     }
 
     if (hasActiveTurn) {
-      if (_canStartNextTurnAfterFinalAnswer) {
-        await _startTurn(trimmed, normalizedAttachments);
-        return;
-      }
       _enqueuePendingPrompt(
         trimmed,
         PendingPromptMode.queued,
@@ -2805,7 +2796,6 @@ while not server.served and time.time() < deadline:
       final turn = response?['turn'];
       if (turn is Map<String, dynamic>) {
         activeTurnId = turn['id'] as String?;
-        _completedFinalAnswerTurnId = null;
         statusMessage = 'Turn running';
         notifyListeners();
       }
@@ -2919,7 +2909,7 @@ while not server.served and time.time() < deadline:
       }
       return;
     }
-    if (hasActiveTurn && !_canStartNextTurnAfterFinalAnswer) {
+    if (hasActiveTurn) {
       return;
     }
     await _startTurn(nextPrompt.text, nextPrompt.attachments);
@@ -3372,7 +3362,6 @@ while not server.served and time.time() < deadline:
         final turn = typedParams['turn'];
         if (turn is Map<String, dynamic>) {
           activeTurnId = turn['id']?.toString();
-          _completedFinalAnswerTurnId = null;
           statusMessage = 'Turn running';
           notifyListeners();
         }
@@ -3380,7 +3369,6 @@ while not server.served and time.time() < deadline:
         final turn = typedParams['turn'];
         if (turn is Map<String, dynamic>) {
           activeTurnId = null;
-          _completedFinalAnswerTurnId = null;
           isSteering = false;
           final turnStatus = turn['status']?.toString() ?? 'completed';
           statusMessage = 'Ready';
@@ -3580,7 +3568,6 @@ while not server.served and time.time() < deadline:
           item['phase']?.toString() == 'final_answer' &&
           turnId != null &&
           turnId.isNotEmpty) {
-        _completedFinalAnswerTurnId = turnId;
         if (pendingPrompts.isNotEmpty) {
           unawaited(_processPendingPrompts());
         }
@@ -4393,7 +4380,6 @@ while not server.served and time.time() < deadline:
         ),
       );
     activeTurnId = null;
-    _completedFinalAnswerTurnId = null;
     activeThreadCwd = thread['cwd']?.toString() ?? activeThreadCwd;
   }
 

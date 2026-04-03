@@ -682,7 +682,7 @@ void main() {
   );
 
   test(
-    'controller starts the next turn after final answer without waiting for turn completed',
+    'controller keeps prompts queued until turn completed even after final answer',
     () async {
       final transport = _FakeTransport();
       final controller = AppController.testing(transport: transport);
@@ -701,14 +701,14 @@ void main() {
 
       await controller.sendPrompt('second');
 
-      expect(transport.turnStartCount, 2);
-      expect(controller.queuedPromptCount, 0);
-      expect(controller.activeTurnId, 'turn_2');
+      expect(transport.turnStartCount, 1);
+      expect(controller.queuedPromptCount, 1);
+      expect(controller.activeTurnId, 'turn_1');
     },
   );
 
   test(
-    'queued prompt drains after final answer even before turn completed',
+    'queued prompt waits for turn completed after final answer',
     () async {
       final transport = _FakeTransport();
       final controller = AppController.testing(transport: transport);
@@ -725,6 +725,21 @@ void main() {
           'type': 'agentMessage',
           'text': 'done',
           'phase': 'final_answer',
+        },
+      });
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(controller.queuedPromptCount, 1);
+      expect(transport.turnStartCount, 1);
+      expect(controller.activeTurnId, 'turn_1');
+
+      transport.emitNotification('turn/completed', <String, dynamic>{
+        'threadId': 'thr_1',
+        'turn': <String, dynamic>{
+          'id': 'turn_1',
+          'status': 'completed',
+          'items': <dynamic>[],
+          'error': null,
         },
       });
       await Future<void>.delayed(const Duration(milliseconds: 10));
