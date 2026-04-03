@@ -424,7 +424,7 @@ void main() {
       const RecentCommand(
         commandText: 'git status',
         cwd: '/workspace/project',
-        mode: CommandSessionMode.buffered,
+        mode: CommandSessionMode.interactive,
         sandboxMode: SandboxMode.workspaceWrite,
         allowNetwork: false,
         disableTimeout: false,
@@ -442,10 +442,17 @@ void main() {
     expect(find.byKey(const ValueKey<String>('command-shell-panel')), findsOneWidget);
     expect(find.byKey(const ValueKey<String>('command-shell-input')), findsOneWidget);
     expect(find.text('Shell history'), findsOneWidget);
+    expect(find.byTooltip('Command settings'), findsOneWidget);
+    expect(find.text('Setup'), findsNothing);
+    expect(find.text('Saved'), findsNothing);
+    expect(find.text('git status'), findsNothing);
+
+    await tester.tap(find.byTooltip('Command settings'));
+    await tester.pumpAndSettle();
+
     expect(find.text('Setup'), findsOneWidget);
     expect(find.text('Saved'), findsOneWidget);
-    expect(find.text('Buffered'), findsOneWidget);
-    expect(find.text('Interactive'), findsOneWidget);
+    expect(find.text('Interactive shell'), findsOneWidget);
     expect(find.text('git status'), findsOneWidget);
   });
 
@@ -460,7 +467,7 @@ void main() {
       cwd: '/workspace/project',
       sandboxMode: SandboxMode.workspaceWrite,
       allowNetwork: false,
-      mode: CommandSessionMode.buffered,
+      mode: CommandSessionMode.interactive,
       timeoutMs: 60000,
       disableTimeout: false,
       outputBytesCap: 32768,

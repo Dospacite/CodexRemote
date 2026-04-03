@@ -4717,7 +4717,6 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
   late final TextEditingController _cwdController;
   late final TextEditingController _timeoutController;
   late final TextEditingController _outputCapController;
-  late CommandSessionMode _mode;
   late SandboxMode _sandboxMode;
   late bool _allowNetwork;
   bool _disableTimeout = false;
@@ -4736,7 +4735,6 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
     );
     _timeoutController = TextEditingController(text: '60000');
     _outputCapController = TextEditingController(text: '32768');
-    _mode = CommandSessionMode.buffered;
     _sandboxMode = settings.sandboxMode;
     _allowNetwork = settings.allowNetwork;
   }
@@ -4767,7 +4765,21 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
         );
         return Scaffold(
           resizeToAvoidBottomInset: false,
-          appBar: AppBar(title: const Text('Command Center')),
+          appBar: AppBar(
+            leading: IconButton(
+              tooltip: 'Command settings',
+              onPressed: _openSettingsModal,
+              icon: const Icon(Icons.settings_outlined),
+            ),
+            title: const Text('Command Center'),
+            actions: <Widget>[
+              IconButton(
+                tooltip: 'Close',
+                onPressed: () => Navigator.of(context).maybePop(),
+                icon: const Icon(Icons.close),
+              ),
+            ],
+          ),
           body: SafeArea(
             top: false,
             child: Padding(
@@ -4807,64 +4819,12 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
                       ),
                       const SizedBox(height: 14),
                       Expanded(
-                        child: Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: _CommandHistoryPanel(
-                                controller: widget.controller,
-                                canRepeat:
-                                    _commandController.text.trim().isEmpty &&
-                                    !hasRunningCommand,
-                                onRepeat: _repeatCommandFromHistory,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: SingleChildScrollView(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    _CommandForm(
-                                      cwdController: _cwdController,
-                                      timeoutController: _timeoutController,
-                                      outputCapController:
-                                          _outputCapController,
-                                      mode: _mode,
-                                      sandboxMode: _sandboxMode,
-                                      allowNetwork: _allowNetwork,
-                                      disableTimeout: _disableTimeout,
-                                      disableOutputCap: _disableOutputCap,
-                                      onModeChanged:
-                                          (CommandSessionMode value) {
-                                            setState(() => _mode = value);
-                                          },
-                                      onSandboxChanged: (SandboxMode value) {
-                                        setState(() => _sandboxMode = value);
-                                      },
-                                      onAllowNetworkChanged: (bool value) {
-                                        setState(() => _allowNetwork = value);
-                                      },
-                                      onDisableTimeoutChanged: (bool value) {
-                                        setState(
-                                          () => _disableTimeout = value,
-                                        );
-                                      },
-                                      onDisableOutputCapChanged: (bool value) {
-                                        setState(
-                                          () => _disableOutputCap = value,
-                                        );
-                                      },
-                                    ),
-                                    const SizedBox(height: 12),
-                                    _SavedCommandPanel(
-                                      controller: widget.controller,
-                                      onTapCommand: _applyRecentCommand,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
+                        child: _CommandHistoryPanel(
+                          controller: widget.controller,
+                          canRepeat:
+                              _commandController.text.trim().isEmpty &&
+                              !hasRunningCommand,
+                          onRepeat: _repeatCommandFromHistory,
                         ),
                       ),
                     ],
@@ -4886,7 +4846,7 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
       cwd: _cwdController.text,
       sandboxMode: _sandboxMode,
       allowNetwork: _allowNetwork,
-      mode: _mode,
+      mode: CommandSessionMode.interactive,
       timeoutMs: timeoutMs,
       disableTimeout: _disableTimeout,
       outputBytesCap: outputCap,
@@ -4923,7 +4883,6 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
     _timeoutController.text = recent.timeoutMs.toString();
     _outputCapController.text = recent.outputBytesCap.toString();
     setState(() {
-      _mode = recent.mode;
       _sandboxMode = recent.sandboxMode;
       _allowNetwork = recent.allowNetwork;
       _disableTimeout = recent.disableTimeout;
@@ -4946,6 +4905,72 @@ class _CommandCenterPageState extends State<CommandCenterPage> {
       ..text = command
       ..selection = TextSelection.collapsed(offset: command.length);
   }
+
+  Future<void> _openSettingsModal() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setModalState) {
+            return FractionallySizedBox(
+              heightFactor: 0.82,
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  8,
+                  16,
+                  MediaQuery.viewInsetsOf(context).bottom + 20,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      _CommandForm(
+                        cwdController: _cwdController,
+                        timeoutController: _timeoutController,
+                        outputCapController: _outputCapController,
+                        sandboxMode: _sandboxMode,
+                        allowNetwork: _allowNetwork,
+                        disableTimeout: _disableTimeout,
+                        disableOutputCap: _disableOutputCap,
+                        onSandboxChanged: (SandboxMode value) {
+                          setState(() => _sandboxMode = value);
+                          setModalState(() {});
+                        },
+                        onAllowNetworkChanged: (bool value) {
+                          setState(() => _allowNetwork = value);
+                          setModalState(() {});
+                        },
+                        onDisableTimeoutChanged: (bool value) {
+                          setState(() => _disableTimeout = value);
+                          setModalState(() {});
+                        },
+                        onDisableOutputCapChanged: (bool value) {
+                          setState(() => _disableOutputCap = value);
+                          setModalState(() {});
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      _SavedCommandPanel(
+                        controller: widget.controller,
+                        onTapCommand: (RecentCommand recent) {
+                          _applyRecentCommand(recent);
+                          Navigator.of(context).pop();
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }
 
 class _CommandForm extends StatelessWidget {
@@ -4953,12 +4978,10 @@ class _CommandForm extends StatelessWidget {
     required this.cwdController,
     required this.timeoutController,
     required this.outputCapController,
-    required this.mode,
     required this.sandboxMode,
     required this.allowNetwork,
     required this.disableTimeout,
     required this.disableOutputCap,
-    required this.onModeChanged,
     required this.onSandboxChanged,
     required this.onAllowNetworkChanged,
     required this.onDisableTimeoutChanged,
@@ -4968,12 +4991,10 @@ class _CommandForm extends StatelessWidget {
   final TextEditingController cwdController;
   final TextEditingController timeoutController;
   final TextEditingController outputCapController;
-  final CommandSessionMode mode;
   final SandboxMode sandboxMode;
   final bool allowNetwork;
   final bool disableTimeout;
   final bool disableOutputCap;
-  final ValueChanged<CommandSessionMode> onModeChanged;
   final ValueChanged<SandboxMode> onSandboxChanged;
   final ValueChanged<bool> onAllowNetworkChanged;
   final ValueChanged<bool> onDisableTimeoutChanged;
@@ -4993,21 +5014,11 @@ class _CommandForm extends StatelessWidget {
         children: <Widget>[
           Text('Setup', style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 12),
-          SegmentedButton<CommandSessionMode>(
-            segments: const <ButtonSegment<CommandSessionMode>>[
-              ButtonSegment<CommandSessionMode>(
-                value: CommandSessionMode.buffered,
-                label: Text('Buffered'),
-              ),
-              ButtonSegment<CommandSessionMode>(
-                value: CommandSessionMode.interactive,
-                label: Text('Interactive'),
-              ),
-            ],
-            selected: <CommandSessionMode>{mode},
-            onSelectionChanged: (Set<CommandSessionMode> selection) {
-              onModeChanged(selection.first);
-            },
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.terminal_outlined),
+            title: const Text('Interactive shell'),
+            subtitle: const Text('Commands always run in interactive mode.'),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -5132,7 +5143,7 @@ class _CommandSessionCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${session.mode.name} • ${session.statusLabel}',
+                    session.statusLabel,
                     style: theme.textTheme.bodySmall,
                   ),
                   if (session.cwd.isNotEmpty)
@@ -5190,7 +5201,7 @@ class _RecentCommandCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    '${command.mode.name} • ${command.sandboxMode.name}',
+                    command.sandboxMode.name,
                     style: theme.textTheme.bodySmall,
                   ),
                   if (command.cwd.isNotEmpty)
@@ -5264,8 +5275,8 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
     return Container(
       key: const ValueKey<String>('command-shell-panel'),
       decoration: BoxDecoration(
-        color: const Color(0xFF101315),
-        border: Border.all(color: theme.colorScheme.outlineVariant),
+        color: theme.colorScheme.surface,
+        border: Border.all(color: theme.dividerColor),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Column(
@@ -5284,7 +5295,6 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleMedium?.copyWith(
-                          color: const Color(0xFFE8F0EB),
                           fontFamily: 'monospace',
                         ),
                       ),
@@ -5296,7 +5306,6 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(
-                          color: const Color(0xFF8EAAA0),
                           fontFamily: 'monospace',
                         ),
                       ),
@@ -5357,7 +5366,6 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   scrollable: false,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: const Color(0xFFE8F0EB),
                                     height: 1.2,
                                   ),
                                 ),
@@ -5366,7 +5374,6 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   '\$ Run a command to start a shell session.',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: const Color(0xFF8EAAA0),
                                   ),
                                 ),
                               if (session != null &&
@@ -5378,7 +5385,6 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                       : 'Command produced no output.',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: const Color(0xFF8EAAA0),
                                   ),
                                 ),
                               if (session != null &&
@@ -5388,7 +5394,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   'Output cap reached',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: const Color(0xFFF3C677),
+                                    color: theme.colorScheme.secondary,
                                   ),
                                 ),
                               ],
@@ -5400,7 +5406,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   scrollable: false,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: const Color(0xFFF5A29B),
+                                    color: theme.colorScheme.error,
                                     height: 1.2,
                                   ),
                                 ),
@@ -5423,7 +5429,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                   '\$',
                   style: TextStyle(
                     fontFamily: 'monospace',
-                    color: Color(0xFF8EE6A2),
+                    color: Color(0xFF2F7D32),
                     fontWeight: FontWeight.w700,
                   ),
                 ),
@@ -5438,26 +5444,22 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                           ? 'Send input to session'
                           : 'Write a shell command',
                       hintStyle: theme.textTheme.bodySmall?.copyWith(
-                        color: const Color(0xFF6E8A80),
+                        color: theme.hintColor,
                       ),
                       filled: true,
-                      fillColor: const Color(0xFF171B1E),
+                      fillColor: theme.colorScheme.surfaceContainerLowest,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                          color: Color(0xFF2B3439),
-                        ),
+                        borderSide: BorderSide(color: theme.dividerColor),
                       ),
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                          color: Color(0xFF2B3439),
-                        ),
+                        borderSide: BorderSide(color: theme.dividerColor),
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                          color: Color(0xFF8EE6A2),
+                        borderSide: BorderSide(
+                          color: theme.colorScheme.primary,
                         ),
                       ),
                       contentPadding: const EdgeInsets.symmetric(
@@ -5465,9 +5467,9 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                         vertical: 12,
                       ),
                     ),
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'monospace',
-                      color: Color(0xFFE8F0EB),
+                      color: theme.colorScheme.onSurface,
                     ),
                   ),
                 ),
