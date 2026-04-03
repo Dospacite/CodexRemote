@@ -530,6 +530,46 @@ void main() {
     expect(shellInput.controller?.text, 'git status');
   });
 
+  testWidgets('shell history clear button only removes finished runs', (
+    WidgetTester tester,
+  ) async {
+    final controller = AppController.testing();
+    final finished = CommandSession(
+      id: 'cmd_finished',
+      processId: 'proc_finished',
+      commandDisplay: 'pwd',
+      cwd: '/workspace/project',
+      mode: CommandSessionMode.interactive,
+      usesTty: false,
+      startedAt: DateTime.now(),
+      status: 'completed',
+      exitCode: 0,
+    );
+    final running = CommandSession(
+      id: 'cmd_running',
+      processId: 'proc_running',
+      commandDisplay: 'top',
+      cwd: '/workspace/project',
+      mode: CommandSessionMode.interactive,
+      usesTty: false,
+      startedAt: DateTime.now(),
+    );
+    controller.commandSessions.addAll(<CommandSession>[running, finished]);
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+    await tester.tap(find.byTooltip('Command'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('pwd'), findsOneWidget);
+    expect(find.text('top'), findsWidgets);
+
+    await tester.tap(find.byTooltip('Clear finished runs'));
+    await tester.pump();
+
+    expect(find.text('pwd'), findsNothing);
+    expect(find.text('top'), findsWidgets);
+  });
+
   test(
     'sending a prompt creates an immediate local pending user entry',
     () async {

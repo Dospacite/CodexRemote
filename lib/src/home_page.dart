@@ -5495,6 +5495,9 @@ class _CommandHistoryPanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final hasFinishedSessions = controller.commandSessions.any(
+      (session) => !session.isRunning,
+    );
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -5509,6 +5512,17 @@ class _CommandHistoryPanel extends StatelessWidget {
             children: <Widget>[
               Text('Shell history', style: theme.textTheme.titleMedium),
               const Spacer(),
+              IconButton(
+                tooltip: 'Clear finished runs',
+                onPressed: hasFinishedSessions
+                    ? controller.clearFinishedCommandSessions
+                    : null,
+                visualDensity: const VisualDensity(
+                  horizontal: -4,
+                  vertical: -4,
+                ),
+                icon: const Icon(Icons.delete_outline),
+              ),
               if (controller.commandSessions.isNotEmpty)
                 Text(
                   '${controller.commandSessions.length}',
