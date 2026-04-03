@@ -395,6 +395,27 @@ void main() {
     },
   );
 
+  testWidgets(
+    'connecting dims content below the app bar and shows a centered spinner',
+    (WidgetTester tester) async {
+      final controller = AppController.testing();
+      controller.status = ConnectionStatus.connecting;
+      controller.statusMessage = 'Connecting';
+
+      await tester.pumpWidget(CodexRemoteApp(controller: controller));
+
+      expect(
+        find.byKey(const ValueKey<String>('connection-overlay')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('connection-overlay-spinner')),
+        findsOneWidget,
+      );
+      expect(find.byType(AppBar), findsOneWidget);
+    },
+  );
+
   testWidgets('command center exposes full standalone command workflow', (
     WidgetTester tester,
   ) async {

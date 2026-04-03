@@ -157,6 +157,9 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
     return AnimatedBuilder(
       animation: controller,
       builder: (BuildContext context, Widget? child) {
+        final isConnecting =
+            controller.status == ConnectionStatus.connecting ||
+            controller.status == ConnectionStatus.initializing;
         return Scaffold(
           appBar: AppBar(
             titleSpacing: 12,
@@ -186,139 +189,149 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
               ),
             ],
           ),
-          body: SafeArea(
-            top: false,
-            child: Column(
-              children: <Widget>[
-                AnimatedCrossFade(
-                  duration: const Duration(milliseconds: 180),
-                  crossFadeState: _showActionBar
-                      ? CrossFadeState.showFirst
-                      : CrossFadeState.showSecond,
-                  firstChild: _ActionBar(
-                    controller: controller,
-                    pulse: _downloadPulseController,
-                    pop: _downloadPopController,
-                    onOpenThreads: () => _openThreadHistory(context),
-                    onOpenFiles: () => _openFiles(context),
-                    onOpenCommands: () => _openCommandCenter(context),
-                    onOpenAutomations: () => _openAutomations(context),
-                    onToggleConnection: () async {
-                      if (controller.isConnected) {
-                        await controller.disconnect();
-                      } else {
-                        await controller.connect();
-                      }
-                    },
-                    onOpenDownloads: () => _openDownloadCenter(context),
-                  ),
-                  secondChild: Container(
-                    width: double.infinity,
-                    height: 0,
-                    decoration: BoxDecoration(
-                      border: Border(
-                        bottom: BorderSide(color: theme.dividerColor),
+          body: Stack(
+            children: <Widget>[
+              SafeArea(
+                top: false,
+                child: Column(
+                  children: <Widget>[
+                    AnimatedCrossFade(
+                      duration: const Duration(milliseconds: 180),
+                      crossFadeState: _showActionBar
+                          ? CrossFadeState.showFirst
+                          : CrossFadeState.showSecond,
+                      firstChild: _ActionBar(
+                        controller: controller,
+                        pulse: _downloadPulseController,
+                        pop: _downloadPopController,
+                        onOpenThreads: () => _openThreadHistory(context),
+                        onOpenFiles: () => _openFiles(context),
+                        onOpenCommands: () => _openCommandCenter(context),
+                        onOpenAutomations: () => _openAutomations(context),
+                        onToggleConnection: () async {
+                          if (controller.isConnected) {
+                            await controller.disconnect();
+                          } else {
+                            await controller.connect();
+                          }
+                        },
+                        onOpenDownloads: () => _openDownloadCenter(context),
+                      ),
+                      secondChild: Container(
+                        width: double.infinity,
+                        height: 0,
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(color: theme.dividerColor),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                ),
-                if (controller.approvals.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: _ApprovalPanel(controller: controller),
-                  ),
-                Expanded(
-                  child: controller.entries.isEmpty
-                      ? Center(
-                          child: Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 24),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: <Widget>[
-                                Text(
-                                  'Connect to a Codex app-server, then send a prompt. Command output, file changes, approvals, and automations will appear in the same timeline.',
-                                  style: theme.textTheme.bodyLarge,
-                                  textAlign: TextAlign.center,
+                    if (controller.approvals.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                        child: _ApprovalPanel(controller: controller),
+                      ),
+                    Expanded(
+                      child: controller.entries.isEmpty
+                          ? Center(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 24,
                                 ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: <Widget>[
+                                    Text(
+                                      'Connect to a Codex app-server, then send a prompt. Command output, file changes, approvals, and automations will appear in the same timeline.',
+                                      style: theme.textTheme.bodyLarge,
+                                      textAlign: TextAlign.center,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : ListView.separated(
+                              reverse: true,
+                              padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
+                              itemBuilder: (BuildContext context, int index) {
+                                final entry = controller.entries[
+                                    controller.entries.length - 1 - index];
+                                return _EntryTile(
+                                  entry: entry,
+                                  onEditMessage: _editTimelineMessage,
+                                  onOpenFileReference: _openFileReference,
+                                );
+                              },
+                              separatorBuilder: (_, _) =>
+                                  const SizedBox(height: 12),
+                              itemCount: controller.entries.length,
+                            ),
+                    ),
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border(
+                          top: BorderSide(color: theme.dividerColor),
+                        ),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                      child: Column(
+                        children: <Widget>[
+                          if (controller.queuedPromptCount > 0)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: _QueuedPromptBar(
+                                controller: controller,
+                                onEditPrompt: _editPendingPrompt,
+                                onPromotePrompt: widget
+                                    .controller
+                                    .promotePendingPromptToSteer,
+                              ),
+                            ),
+                          SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: <Widget>[
+                                _FooterIconButton(
+                                  tooltip: 'Attach',
+                                  icon: Icons.attach_file_outlined,
+                                  onPressed: _pickComposerAttachments,
+                                ),
+                                const SizedBox(width: 8),
+                                _FooterActionButton(
+                                  label: controller.settings.planMode
+                                      ? 'Plan on'
+                                      : 'Plan off',
+                                  icon: Icons.route_outlined,
+                                  onPressed: () => _togglePlanMode(controller),
+                                ),
+                                const SizedBox(width: 8),
+                                _FooterActionButton(
+                                  label: _modelLabel(controller),
+                                  icon: Icons.tune_outlined,
+                                  onPressed: () =>
+                                      _editModel(context, controller),
+                                ),
+                                const SizedBox(width: 8),
+                                _FooterActionButton(
+                                  label: controller.settings.reasoningEffort,
+                                  icon: Icons.psychology_alt_outlined,
+                                  onPressed: () => _pickReasoningEffort(
+                                    context,
+                                    controller,
+                                  ),
+                                ),
+                                if (controller.hasActiveTurn) ...<Widget>[
+                                  const SizedBox(width: 8),
+                                  _FooterIconButton(
+                                    tooltip: 'Stop',
+                                    icon: Icons.stop_circle_outlined,
+                                    onPressed: controller.interruptTurn,
+                                  ),
+                                ],
                               ],
                             ),
                           ),
-                        )
-                      : ListView.separated(
-                          reverse: true,
-                          padding: const EdgeInsets.fromLTRB(16, 18, 16, 24),
-                          itemBuilder: (BuildContext context, int index) {
-                            final entry = controller
-                                .entries[controller.entries.length - 1 - index];
-                            return _EntryTile(
-                              entry: entry,
-                              onEditMessage: _editTimelineMessage,
-                              onOpenFileReference: _openFileReference,
-                            );
-                          },
-                          separatorBuilder: (_, _) =>
-                              const SizedBox(height: 12),
-                          itemCount: controller.entries.length,
-                        ),
-                ),
-                Container(
-                  decoration: BoxDecoration(
-                    border: Border(top: BorderSide(color: theme.dividerColor)),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                  child: Column(
-                    children: <Widget>[
-                      if (controller.queuedPromptCount > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: _QueuedPromptBar(
-                            controller: controller,
-                            onEditPrompt: _editPendingPrompt,
-                            onPromotePrompt:
-                                widget.controller.promotePendingPromptToSteer,
-                          ),
-                        ),
-                      SingleChildScrollView(
-                        scrollDirection: Axis.horizontal,
-                        child: Row(
-                          children: <Widget>[
-                            _FooterIconButton(
-                              tooltip: 'Attach',
-                              icon: Icons.attach_file_outlined,
-                              onPressed: _pickComposerAttachments,
-                            ),
-                            const SizedBox(width: 8),
-                            _FooterActionButton(
-                              label: controller.settings.planMode
-                                  ? 'Plan on'
-                                  : 'Plan off',
-                              icon: Icons.route_outlined,
-                              onPressed: () => _togglePlanMode(controller),
-                            ),
-                            const SizedBox(width: 8),
-                            _FooterActionButton(
-                              label: _modelLabel(controller),
-                              icon: Icons.tune_outlined,
-                              onPressed: () => _editModel(context, controller),
-                            ),
-                            const SizedBox(width: 8),
-                            _FooterActionButton(
-                              label: controller.settings.reasoningEffort,
-                              icon: Icons.psychology_alt_outlined,
-                              onPressed: () =>
-                                  _pickReasoningEffort(context, controller),
-                            ),
-                            if (controller.hasActiveTurn) ...<Widget>[
-                              const SizedBox(width: 8),
-                              _FooterIconButton(
-                                tooltip: 'Stop',
-                                icon: Icons.stop_circle_outlined,
-                                onPressed: controller.interruptTurn,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
                       const SizedBox(height: 8),
                       if (_composerAttachments.isNotEmpty)
                         Padding(
@@ -500,9 +513,25 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
                       ),
                     ],
                   ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
+              ),
+              if (isConnecting)
+                Positioned.fill(
+                  child: AbsorbPointer(
+                    child: Container(
+                      key: const ValueKey<String>('connection-overlay'),
+                      color: theme.colorScheme.scrim.withValues(alpha: 0.24),
+                      child: const Center(
+                        child: CircularProgressIndicator(
+                          key: ValueKey<String>('connection-overlay-spinner'),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
           ),
         );
       },
