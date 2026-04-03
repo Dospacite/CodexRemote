@@ -5267,6 +5267,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
   Widget build(BuildContext context) {
     final session = widget.session;
     final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final interactiveInput =
         session != null &&
         session.isInteractive &&
@@ -5275,7 +5276,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
     return Container(
       key: const ValueKey<String>('command-shell-panel'),
       decoration: BoxDecoration(
-        color: theme.colorScheme.surface,
+        color: scheme.surfaceContainerLow,
         border: Border.all(color: theme.dividerColor),
         borderRadius: BorderRadius.circular(10),
       ),
@@ -5296,32 +5297,36 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontFamily: 'monospace',
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         session?.cwd.isNotEmpty == true
                             ? session!.cwd
-                            : 'Ready for a command',
+                            : 'Terminal ready',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: theme.textTheme.bodySmall?.copyWith(
                           fontFamily: 'monospace',
+                          color: scheme.onSurfaceVariant,
                         ),
                       ),
                     ],
                   ),
                 ),
                 if (widget.onTerminate != null)
-                  OutlinedButton(
+                  IconButton(
+                    tooltip: 'Terminate',
                     onPressed: session?.isRunning == true
                         ? widget.onTerminate
                         : null,
-                    child: const Text('Terminate'),
+                    icon: const Icon(Icons.stop_circle_outlined),
                   ),
               ],
             ),
           ),
+          Divider(height: 1, color: theme.dividerColor),
           Expanded(
             child: LayoutBuilder(
               builder: (BuildContext context, BoxConstraints constraints) {
@@ -5367,13 +5372,15 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
                                     height: 1.2,
+                                    color: scheme.onSurface,
                                   ),
                                 ),
                               if (session == null)
                                 Text(
-                                  '\$ Run a command to start a shell session.',
+                                  '\$ Enter a command below to start a shell session.',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
+                                    color: scheme.onSurfaceVariant,
                                   ),
                                 ),
                               if (session != null &&
@@ -5385,6 +5392,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                       : 'Command produced no output.',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
+                                    color: scheme.onSurfaceVariant,
                                   ),
                                 ),
                               if (session != null &&
@@ -5394,7 +5402,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   'Output cap reached',
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: theme.colorScheme.secondary,
+                                    color: scheme.secondary,
                                   ),
                                 ),
                               ],
@@ -5406,7 +5414,7 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                                   scrollable: false,
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     fontFamily: 'monospace',
-                                    color: theme.colorScheme.error,
+                                    color: scheme.error,
                                     height: 1.2,
                                   ),
                                 ),
@@ -5421,16 +5429,19 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
               },
             ),
           ),
+          Divider(height: 1, color: theme.dividerColor),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
-                const Text(
+                Text(
                   '\$',
-                  style: TextStyle(
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     fontFamily: 'monospace',
-                    color: Color(0xFF2F7D32),
+                    color: scheme.primary,
                     fontWeight: FontWeight.w700,
+                    height: 1.2,
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -5439,44 +5450,27 @@ class _CommandSessionViewState extends State<_CommandSessionView> {
                     key: const ValueKey<String>('command-shell-input'),
                     controller: widget.commandController,
                     onSubmitted: (_) => widget.onSubmit(),
+                    textInputAction: TextInputAction.send,
+                    maxLines: 1,
+                    cursorColor: scheme.primary,
                     decoration: InputDecoration(
+                      isCollapsed: true,
+                      border: InputBorder.none,
                       hintText: interactiveInput
-                          ? 'Send input to session'
-                          : 'Write a shell command',
-                      hintStyle: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.hintColor,
-                      ),
-                      filled: true,
-                      fillColor: theme.colorScheme.surfaceContainerLowest,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: theme.dividerColor),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(color: theme.dividerColor),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: theme.colorScheme.primary,
-                        ),
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 12,
+                          ? 'stdin to active process'
+                          : 'type a command and press Enter',
+                      hintStyle: theme.textTheme.bodyMedium?.copyWith(
+                        fontFamily: 'monospace',
+                        color: scheme.onSurfaceVariant,
+                        height: 1.2,
                       ),
                     ),
-                    style: TextStyle(
+                    style: theme.textTheme.bodyMedium?.copyWith(
                       fontFamily: 'monospace',
-                      color: theme.colorScheme.onSurface,
+                      color: scheme.onSurface,
+                      height: 1.2,
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: widget.onSubmit,
-                  child: Text(interactiveInput ? 'Send' : 'Run'),
                 ),
               ],
             ),
