@@ -5,6 +5,7 @@ import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -40,6 +41,25 @@ class MainActivity : FlutterActivity() {
                     val intent = Intent(this, CodexForegroundService::class.java).apply {
                         action = CodexForegroundService.ACTION_SEND
                         putExtra(CodexForegroundService.EXTRA_PAYLOAD, payload)
+                    }
+                    CodexForegroundService.startService(this, intent)
+                    result.success(null)
+                }
+
+                "sendFile" -> {
+                    val path = call.argument<String>("path")
+                    if (path.isNullOrBlank()) {
+                        result.error("invalid_args", "Missing payload file path", null)
+                        return@setMethodCallHandler
+                    }
+                    val file = File(path)
+                    if (!file.exists()) {
+                        result.error("invalid_args", "Payload file does not exist", null)
+                        return@setMethodCallHandler
+                    }
+                    val intent = Intent(this, CodexForegroundService::class.java).apply {
+                        action = CodexForegroundService.ACTION_SEND_FILE
+                        putExtra(CodexForegroundService.EXTRA_PAYLOAD_FILE, path)
                     }
                     CodexForegroundService.startService(this, intent)
                     result.success(null)
