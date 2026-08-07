@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:xterm/xterm.dart';
 
 void main() {
   setUp(() {
@@ -563,143 +564,208 @@ void main() {
     },
   );
 
-  testWidgets('command center exposes full standalone command workflow', (
-    WidgetTester tester,
-  ) async {
-    final controller = AppController.testing();
-    controller.recentCommands.add(
-      const RecentCommand(
-        commandText: 'git status',
-        cwd: '/workspace/project',
-        mode: CommandSessionMode.interactive,
-        sandboxMode: SandboxMode.workspaceWrite,
-        allowNetwork: false,
-        disableTimeout: false,
-        timeoutMs: 60000,
-        disableOutputCap: false,
-        outputBytesCap: 32768,
-      ),
-    );
+  testWidgets(
+    'command center renders persistent shell tabs and flattened settings',
+    (WidgetTester tester) async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
 
-    await tester.pumpWidget(CodexRemoteApp(controller: controller));
-    await tester.tap(find.byTooltip('Command'));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(CodexRemoteApp(controller: controller));
+      await tester.tap(find.byTooltip('Command'));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Command Center'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey<String>('command-shell-panel')),
-      findsOneWidget,
-    );
-    expect(
-      find.byKey(const ValueKey<String>('command-shell-input')),
-      findsOneWidget,
-    );
-    expect(find.text('Shell history'), findsOneWidget);
-    expect(find.byTooltip('Command settings'), findsOneWidget);
-    expect(find.text('Setup'), findsNothing);
-    expect(find.text('Saved'), findsNothing);
-    expect(find.text('git status'), findsNothing);
+      expect(find.text('Shell'), findsWidgets);
+      expect(
+        find.byKey(const ValueKey<String>('command-shell-panel')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey<String>('command-shell-tab-row')),
+        findsOneWidget,
+      );
+      expect(find.byType(TerminalView), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey<String>('command-shell-input')),
+        findsNothing,
+      );
+      expect(find.byTooltip('Command settings'), findsOneWidget);
+      expect(find.byTooltip('New shell tab'), findsOneWidget);
+      expect(controller.shellSessions, hasLength(1));
+      expect(find.text('Setup'), findsNothing);
 
-    await tester.tap(find.byTooltip('Command settings'));
-    await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Command settings'));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Setup'), findsOneWidget);
-    expect(find.text('Saved'), findsOneWidget);
-    expect(find.text('Interactive shell'), findsOneWidget);
-    expect(find.text('git status'), findsOneWidget);
-  });
+      expect(find.text('Working directory'), findsOneWidget);
+      expect(find.text('Setup'), findsNothing);
+      expect(find.text('Persistent PTY shell'), findsNothing);
+      expect(
+        find.text('Runs as one live terminal using tty mode.'),
+        findsNothing,
+      );
+    },
+  );
 
-  testWidgets('history repeat copies command into shell when idle', (
+  test(
+    'creating an initial shell session with thread cwd uses tty-backed streaming shell',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+      controller.activeThreadCwd = '/workspace/project';
+
+      await controller.createShellSession(rows: 24, cols: 96);
+
+      expect(controller.activeShellSession, isNotNull);
+      expect(controller.activeShellSession?.isRunning, isTrue);
+      expect(controller.activeShellSession?.cwdDisplay, '/workspace/project');
+      expect(transport.lastShellCommand, 'exec /bin/bash -l');
+      expect(transport.lastCommandCwd, '/workspace/project');
+      expect(transport.lastCommandUsesTty, isTrue);
+      expect(transport.lastCommandStreamsStdin, isTrue);
+      expect(transport.lastCommandRows, 24);
+      expect(transport.lastCommandCols, 96);
+    },
+  );
+
+  test(
+    'creating an initial shell session with no active thread uses the home shell command',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+
+      await controller.createShellSession(rows: 24, cols: 96);
+
+      expect(controller.activeShellSession, isNotNull);
+      expect(
+        controller.activeShellSession?.spawnCwdMode,
+        ShellSpawnCwdMode.home,
+      );
+      expect(controller.activeShellSession?.cwdDisplay, '~/');
+      expect(transport.lastShellCommand, 'cd ~ && exec /bin/bash -l');
+      expect(transport.lastCommandCwd, isNull);
+    },
+  );
+
+  test(
+    'creating another shell session inserts it to the right and selects it',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+      controller.activeThreadCwd = '/thread-one';
+
+      await controller.createShellSession(rows: 20, cols: 80);
+      final firstId = controller.activeShellSession!.id;
+
+      controller.activeThreadCwd = '/thread-two';
+      await controller.createShellSession(
+        insertAfterIndex: 0,
+        rows: 20,
+        cols: 80,
+      );
+
+      expect(controller.shellSessions, hasLength(2));
+      expect(controller.shellSessions.first.id, firstId);
+      expect(controller.shellSessions[1].spawnCwdPath, '/thread-two');
+      expect(controller.activeShellSession?.id, controller.shellSessions[1].id);
+    },
+  );
+
+  test(
+    'shell sessions write resize and terminate through command exec APIs',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+      controller.activeThreadCwd = '/thread-cwd';
+
+      await controller.createShellSession(rows: 20, cols: 80);
+      final shell = controller.activeShellSession!;
+
+      await controller.writeToShellSession(
+        shell.id,
+        'flutter build apk --release\n',
+      );
+      await controller.resizeShellSession(shell.id, rows: 30, cols: 100);
+      await controller.terminateShellSession(shell.id);
+
+      expect(transport.lastCommandWrite, 'flutter build apk --release\n');
+      expect(transport.lastResizeRows, 30);
+      expect(transport.lastResizeCols, 100);
+      expect(transport.lastTerminatedProcessId, shell.processId);
+      expect(controller.activeShellSession?.status, 'terminated');
+      expect(controller.activeShellSession?.isRunning, isFalse);
+    },
+  );
+
+  testWidgets(
+    'command center preserves shell sessions when leaving and reopening',
+    (WidgetTester tester) async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+
+      await tester.pumpWidget(CodexRemoteApp(controller: controller));
+      await tester.tap(find.byTooltip('Command'));
+      await tester.pumpAndSettle();
+
+      final firstShellId = controller.activeShellSession?.id;
+      expect(firstShellId, isNotNull);
+      expect(controller.shellSessions, hasLength(1));
+
+      await tester.tap(find.byTooltip('Close'));
+      await tester.pumpAndSettle();
+
+      expect(controller.shellSessions, hasLength(1));
+      expect(controller.activeShellSession?.id, firstShellId);
+
+      await tester.tap(find.byTooltip('Command'));
+      await tester.pumpAndSettle();
+
+      expect(controller.shellSessions, hasLength(1));
+      expect(controller.activeShellSession?.id, firstShellId);
+      expect(find.byType(TerminalView), findsOneWidget);
+    },
+  );
+
+  testWidgets('command center creates another shell tab with the plus button', (
     WidgetTester tester,
   ) async {
     final transport = _FakeTransport();
     final controller = AppController.testing(transport: transport);
-
-    await controller.startCommandExecution(
-      commandText: 'git status',
-      cwd: '/workspace/project',
-      sandboxMode: SandboxMode.workspaceWrite,
-      allowNetwork: false,
-      mode: CommandSessionMode.interactive,
-      timeoutMs: 60000,
-      disableTimeout: false,
-      outputBytesCap: 32768,
-      disableOutputCap: false,
-    );
+    controller.activeThreadCwd = '/thread-one';
 
     await tester.pumpWidget(CodexRemoteApp(controller: controller));
     await tester.tap(find.byTooltip('Command'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('Repeat').first);
-    await tester.pump();
+    controller.activeThreadCwd = '/thread-two';
+    await tester.tap(find.byTooltip('New shell tab'));
+    await tester.pumpAndSettle();
 
-    final shellInput = tester.widget<TextField>(
-      find.byKey(const ValueKey<String>('command-shell-input')),
-    );
-    expect(shellInput.controller?.text, 'git status');
+    expect(controller.shellSessions, hasLength(2));
+    expect(controller.activeShellSession?.spawnCwdPath, '/thread-two');
   });
 
-  testWidgets('command center disables timeout for flutter build commands', (
+  testWidgets('command center can close shell tabs', (
     WidgetTester tester,
   ) async {
     final transport = _FakeTransport();
     final controller = AppController.testing(transport: transport);
+    controller.activeThreadCwd = '/thread-one';
 
     await tester.pumpWidget(CodexRemoteApp(controller: controller));
     await tester.tap(find.byTooltip('Command'));
     await tester.pumpAndSettle();
 
-    await tester.enterText(
-      find.byKey(const ValueKey<String>('command-shell-input')),
-      'flutter build apk --release',
-    );
-    await tester.testTextInput.receiveAction(TextInputAction.done);
-    await tester.pump();
-
-    expect(transport.lastShellCommand, 'flutter build apk --release');
-    expect(transport.lastCommandDisableTimeout, isTrue);
-    expect(transport.lastCommandTimeoutMs, isNull);
-  });
-
-  testWidgets('shell history clear button only removes finished runs', (
-    WidgetTester tester,
-  ) async {
-    final controller = AppController.testing();
-    final finished = CommandSession(
-      id: 'cmd_finished',
-      processId: 'proc_finished',
-      commandDisplay: 'pwd',
-      cwd: '/workspace/project',
-      mode: CommandSessionMode.interactive,
-      usesTty: false,
-      startedAt: DateTime.now(),
-      status: 'completed',
-      exitCode: 0,
-    );
-    final running = CommandSession(
-      id: 'cmd_running',
-      processId: 'proc_running',
-      commandDisplay: 'top',
-      cwd: '/workspace/project',
-      mode: CommandSessionMode.interactive,
-      usesTty: false,
-      startedAt: DateTime.now(),
-    );
-    controller.commandSessions.addAll(<CommandSession>[running, finished]);
-
-    await tester.pumpWidget(CodexRemoteApp(controller: controller));
-    await tester.tap(find.byTooltip('Command'));
+    controller.activeThreadCwd = '/thread-two';
+    await tester.tap(find.byTooltip('New shell tab'));
     await tester.pumpAndSettle();
 
-    expect(find.text('pwd'), findsOneWidget);
-    expect(find.text('top'), findsWidgets);
+    expect(controller.shellSessions, hasLength(2));
 
-    await tester.tap(find.byTooltip('Clear finished runs'));
-    await tester.pump();
+    await tester.tap(find.byTooltip('Close shell tab').last);
+    await tester.pumpAndSettle();
 
-    expect(find.text('pwd'), findsNothing);
-    expect(find.text('top'), findsWidgets);
+    expect(controller.shellSessions, hasLength(1));
+    expect(controller.activeShellSession?.spawnCwdPath, '/thread-one');
   });
 
   test(
@@ -2218,12 +2284,18 @@ class _FakeTransport implements AppTransport {
   bool failNextSteer = false;
   String? lastCommandCwd;
   String? lastShellCommand;
+  String? lastCommandWrite;
+  String? lastTerminatedProcessId;
   List<Map<String, dynamic>>? lastTurnStartInput;
   bool? lastDownloadDisableTimeout;
   bool? lastCommandUsesTty;
   bool? lastCommandStreamsStdin;
   bool? lastCommandDisableTimeout;
   int? lastCommandTimeoutMs;
+  int? lastCommandRows;
+  int? lastCommandCols;
+  int? lastResizeRows;
+  int? lastResizeCols;
   Uri? lastConnectedUri;
   final List<String> unsubscribedThreadIds = <String>[];
   final List<String> removedPaths = <String>[];
@@ -2431,15 +2503,30 @@ class _FakeTransport implements AppTransport {
           .map((item) => item.toString())
           .toList();
       lastCommandCwd = params['cwd']?.toString();
-      if (command.length >= 3 &&
-          command.first == '/bin/bash' &&
-          command[1] == '-lc') {
-        lastShellCommand = command[2];
-      }
       lastCommandUsesTty = params['tty'] == true;
       lastCommandStreamsStdin = params['streamStdin'] == true;
       lastCommandDisableTimeout = params['disableTimeout'] == true;
       lastCommandTimeoutMs = params['timeoutMs'] as int?;
+      final size = params['size'] as Map<String, dynamic>?;
+      lastCommandRows = size?['rows'] as int?;
+      lastCommandCols = size?['cols'] as int?;
+      if (command.length >= 3 &&
+          command.first == '/bin/bash' &&
+          command[1] == '-lc') {
+        lastShellCommand = command[2];
+        if (command[2] == 'exec /bin/bash -l' ||
+            command[2] == 'cd ~ && exec /bin/bash -l') {
+          final processId = params['processId']?.toString() ?? '';
+          emitNotification('command/exec/outputDelta', <String, dynamic>{
+            'processId': processId,
+            'stream': 'stdout',
+            'deltaBase64': base64Encode(
+              utf8.encode('\u001B[32mshell ready\u001B[0m\r\n'),
+            ),
+          });
+          return;
+        }
+      }
       if (command.length >= 3 &&
           command.first == '/bin/bash' &&
           command[2] == r'wc -c < "$1"') {
@@ -2511,6 +2598,28 @@ class _FakeTransport implements AppTransport {
       return;
     }
     if (method == 'command/exec/resize') {
+      final params = decoded['params'] as Map<String, dynamic>;
+      final size = params['size'] as Map<String, dynamic>?;
+      lastResizeRows = size?['rows'] as int?;
+      lastResizeCols = size?['cols'] as int?;
+      _respond(id as int, <String, dynamic>{});
+      return;
+    }
+    if (method == 'command/exec/write') {
+      final params = decoded['params'] as Map<String, dynamic>;
+      final deltaBase64 = params['deltaBase64']?.toString();
+      if (deltaBase64 != null) {
+        lastCommandWrite = utf8.decode(
+          base64Decode(deltaBase64),
+          allowMalformed: true,
+        );
+      }
+      _respond(id as int, <String, dynamic>{});
+      return;
+    }
+    if (method == 'command/exec/terminate') {
+      final params = decoded['params'] as Map<String, dynamic>;
+      lastTerminatedProcessId = params['processId']?.toString();
       _respond(id as int, <String, dynamic>{});
       return;
     }

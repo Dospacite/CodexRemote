@@ -48,6 +48,7 @@ dependencies:
   shared_preferences: ^2.5.3
   super_clipboard: ^0.9.0
   web_socket_channel: ^3.0.3
+  xterm: ^4.0.0
 
 dev_dependencies:
   flutter_test:

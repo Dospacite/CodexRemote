@@ -1,8 +1,13 @@
+library settings_page;
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../../../app_controller.dart';
 import '../../../models.dart';
+
+part 'settings_page/relay_pairing_qr_scanner_page.dart';
+part 'settings_page/settings_sections.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, required this.controller});
@@ -75,219 +80,51 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
-              DropdownButtonFormField<ConnectionMode>(
-                initialValue: _connectionMode,
-                decoration: const InputDecoration(labelText: 'Connection mode'),
-                items: ConnectionMode.values.map((ConnectionMode value) {
-                  return DropdownMenuItem<ConnectionMode>(
-                    value: value,
-                    child: Text(value.name),
-                  );
-                }).toList(),
-                onChanged: (ConnectionMode? value) {
-                  if (value != null) {
-                    setState(() {
-                      _connectionMode = value;
-                    });
-                  }
+              _ConnectionSection(
+                connectionMode: _connectionMode,
+                serverController: _serverController,
+                websocketBearerTokenController: _websocketBearerTokenController,
+                relayUrlController: _relayUrlController,
+                pairingCodeController: _pairingCodeController,
+                isPairing: _isPairing,
+                pairingError: _pairingError,
+                pairingSuccess: _pairingSuccess,
+                relayDeviceId: widget.controller.settings.relayDeviceId,
+                relayBridgeLabel: widget.controller.settings.relayBridgeLabel,
+                onConnectionModeChanged: (ConnectionMode value) {
+                  setState(() {
+                    _connectionMode = value;
+                  });
                 },
+                onScanQrCode: _scanRelayQrCode,
+                onPairDevice: _pairRelayDevice,
+                onClearPairing: _clearRelayPairing,
               ),
               const SizedBox(height: 12),
-              if (_connectionMode == ConnectionMode.direct) ...<Widget>[
-                TextField(
-                  controller: _serverController,
-                  decoration: const InputDecoration(
-                    labelText: 'Websocket URL',
-                    hintText: 'ws://192.168.1.20:8080',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _websocketBearerTokenController,
-                  autocorrect: false,
-                  enableSuggestions: false,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Websocket bearer token',
-                    hintText: 'Optional Authorization: Bearer token',
-                    helperText:
-                        'Sent during the websocket handshake when app-server auth is enabled.',
-                  ),
-                ),
-              ] else ...<Widget>[
-                TextField(
-                  controller: _relayUrlController,
-                  decoration: const InputDecoration(
-                    labelText: 'Relay URL',
-                    hintText: 'https://relay.example.com',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _pairingCodeController,
-                  minLines: 2,
-                  maxLines: 4,
-                  decoration: const InputDecoration(
-                    labelText: 'Pairing code',
-                    hintText: 'crp1....',
-                    helperText:
-                        'Paste the pairing code or scan the QR shown by codex-remote-cli.',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: OutlinedButton.icon(
-                    onPressed: _isPairing ? null : _scanRelayQrCode,
-                    icon: const Icon(Icons.qr_code_scanner),
-                    label: const Text('Scan QR code'),
-                  ),
-                ),
-                if (widget.controller.settings.relayDeviceId.trim().isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      'Paired bridge: ${widget.controller.settings.relayBridgeLabel.isEmpty ? widget.controller.settings.relayDeviceId : widget.controller.settings.relayBridgeLabel}',
-                      style: theme.textTheme.bodySmall,
-                    ),
-                  ),
-                if (_pairingError != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      _pairingError!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.error,
-                      ),
-                    ),
-                  ),
-                if (_pairingSuccess != null)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 8),
-                    child: Text(
-                      _pairingSuccess!,
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        color: theme.colorScheme.primary,
-                      ),
-                    ),
-                  ),
-                const SizedBox(height: 12),
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _isPairing ? null : _pairRelayDevice,
-                        child: Text(_isPairing ? 'Pairing...' : 'Pair device'),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed:
-                            widget.controller.settings.relayDeviceId.isEmpty
-                            ? null
-                            : _clearRelayPairing,
-                        child: const Text('Clear pairing'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 12),
-              DropdownButtonFormField<ThemePreference>(
-                initialValue: _themePreference,
-                decoration: const InputDecoration(labelText: 'Theme'),
-                items: ThemePreference.values.map((item) {
-                  return DropdownMenuItem<ThemePreference>(
-                    value: item,
-                    child: Text(item.name),
-                  );
-                }).toList(),
-                onChanged: (ThemePreference? value) {
-                  if (value != null) {
-                    setState(() => _themePreference = value);
-                  }
+              _PreferencesSection(
+                themePreference: _themePreference,
+                sandboxMode: _sandboxMode,
+                approvalPolicy: _approvalPolicy,
+                allowNetwork: _allowNetwork,
+                threadLoadTimeoutController: _threadLoadTimeoutController,
+                resumeThreadId: widget.controller.settings.resumeThreadId,
+                onThemeChanged: (ThemePreference value) {
+                  setState(() => _themePreference = value);
                 },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<SandboxMode>(
-                initialValue: _sandboxMode,
-                decoration: const InputDecoration(labelText: 'Sandbox'),
-                items: SandboxMode.values.map((item) {
-                  return DropdownMenuItem<SandboxMode>(
-                    value: item,
-                    child: Text(item.name),
-                  );
-                }).toList(),
-                onChanged: (SandboxMode? value) {
-                  if (value != null) {
-                    setState(() => _sandboxMode = value);
-                  }
+                onSandboxChanged: (SandboxMode value) {
+                  setState(() => _sandboxMode = value);
                 },
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                initialValue: _approvalPolicy,
-                decoration: const InputDecoration(labelText: 'Approval policy'),
-                items:
-                    const <String>[
-                      'untrusted',
-                      'on-request',
-                      'on-failure',
-                      'never',
-                    ].map((item) {
-                      return DropdownMenuItem<String>(
-                        value: item,
-                        child: Text(item),
-                      );
-                    }).toList(),
-                onChanged: (String? value) {
-                  if (value != null) {
-                    setState(() => _approvalPolicy = value);
-                  }
+                onApprovalPolicyChanged: (String value) {
+                  setState(() => _approvalPolicy = value);
                 },
-              ),
-              const SizedBox(height: 12),
-              SwitchListTile.adaptive(
-                value: _allowNetwork,
-                contentPadding: EdgeInsets.zero,
-                title: const Text('Allow network in workspace-write mode'),
-                onChanged: (bool value) {
+                onAllowNetworkChanged: (bool value) {
                   setState(() => _allowNetwork = value);
                 },
               ),
               const SizedBox(height: 12),
-              TextField(
-                controller: _threadLoadTimeoutController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Thread load timeout ms',
-                  helperText:
-                      'Used for thread list, thread read, and thread resume requests.',
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Last thread: ${widget.controller.settings.resumeThreadId.isEmpty ? 'none' : widget.controller.settings.resumeThreadId}',
-                style: theme.textTheme.bodySmall,
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      child: const Text('Close'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: _save,
-                      child: const Text('Save'),
-                    ),
-                  ),
-                ],
+              _SettingsFooter(
+                onClose: () => Navigator.of(context).pop(),
+                onSave: _save,
               ),
             ],
           ),
@@ -373,76 +210,5 @@ class _SettingsPageState extends State<SettingsPage> {
       _pairingSuccess = null;
       _connectionMode = ConnectionMode.direct;
     });
-  }
-}
-
-class _RelayPairingQrScannerPage extends StatefulWidget {
-  const _RelayPairingQrScannerPage();
-
-  @override
-  State<_RelayPairingQrScannerPage> createState() =>
-      _RelayPairingQrScannerPageState();
-}
-
-class _RelayPairingQrScannerPageState
-    extends State<_RelayPairingQrScannerPage> {
-  final MobileScannerController _controller = MobileScannerController();
-  bool _handledCode = false;
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Scaffold(
-      appBar: AppBar(title: const Text('Scan Pairing QR')),
-      body: Stack(
-        children: <Widget>[
-          MobileScanner(
-            controller: _controller,
-            onDetect: (BarcodeCapture capture) {
-              if (_handledCode) {
-                return;
-              }
-              for (final barcode in capture.barcodes) {
-                final rawValue = barcode.rawValue?.trim() ?? '';
-                if (!rawValue.startsWith('crp1.')) {
-                  continue;
-                }
-                _handledCode = true;
-                _controller.stop();
-                Navigator.of(context).pop(rawValue);
-                return;
-              }
-            },
-          ),
-          Positioned(
-            left: 20,
-            right: 20,
-            bottom: 24,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(
-                  'Point the camera at the relay pairing QR code.',
-                  textAlign: TextAlign.center,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: Colors.white,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }

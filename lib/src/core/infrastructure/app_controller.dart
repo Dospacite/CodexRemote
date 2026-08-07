@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/widgets.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:xterm/xterm.dart';
 
 import '../../models.dart';
 import '../../settings_store.dart';
@@ -95,6 +96,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   int? contextUsagePercent;
   String? _threadHistoryCursor;
   String? activeCommandSessionId;
+  String? activeShellSessionId;
   bool isSteering = false;
   String fileBrowserPath = '';
   String? selectedFilePath;
@@ -119,6 +121,7 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
   final List<FileSystemEntry> fileBrowserEntries = <FileSystemEntry>[];
   final List<ModelOption> modelOptions = <ModelOption>[];
   final List<AutomationDefinition> automations = <AutomationDefinition>[];
+  final List<ShellSession> shellSessions = <ShellSession>[];
   final List<CommandSession> commandSessions = <CommandSession>[];
   final List<RecentCommand> recentCommands = <RecentCommand>[];
   final List<PendingPrompt> pendingPrompts = <PendingPrompt>[];
@@ -126,6 +129,10 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
 
   final Map<String, ActivityEntry> _entryByItemId = <String, ActivityEntry>{};
   final List<String> _pendingOptimisticUserEntryKeys = <String>[];
+  final Map<String, ShellSession> _shellSessionsById = <String, ShellSession>{};
+  final Map<String, ShellSession> _shellSessionsByProcessId =
+      <String, ShellSession>{};
+  final Map<String, Terminal> _shellTerminalsBySessionId = <String, Terminal>{};
   final Map<String, CommandSession> _commandSessionsById =
       <String, CommandSession>{};
   final Map<String, CommandSession> _commandSessionsByProcessId =
@@ -193,6 +200,45 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return commandCwd;
     }
     return '/';
+  }
+
+  ShellSession? get activeShellSession {
+    if (activeShellSessionId == null) {
+      return shellSessions.isEmpty ? null : shellSessions.first;
+    }
+    return _shellSessionsById[activeShellSessionId!] ??
+        (shellSessions.isEmpty ? null : shellSessions.first);
+  }
+
+  Terminal terminalForShellSession(String sessionId) {
+    return _shellTerminalsBySessionId.putIfAbsent(
+      sessionId,
+      () => Terminal(
+        maxLines: 5000,
+        onOutput: (String data) {
+          unawaited(writeToShellSession(sessionId, data));
+        },
+        onResize: (int cols, int rows, int pixelWidth, int pixelHeight) {
+          unawaited(resizeShellSession(sessionId, rows: rows, cols: cols));
+        },
+      ),
+    );
+  }
+
+  _ShellLaunchContext get defaultShellLaunchContext {
+    final threadCwd = activeThreadCwd.trim();
+    if (threadCwd.isNotEmpty) {
+      return _ShellLaunchContext(
+        mode: ShellSpawnCwdMode.threadPath,
+        path: threadCwd,
+        display: threadCwd,
+      );
+    }
+    return const _ShellLaunchContext(
+      mode: ShellSpawnCwdMode.home,
+      path: '',
+      display: '~/',
+    );
   }
 
   Duration get _threadLoadTimeout {
@@ -461,6 +507,13 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     }
     _runningAutomationIds.clear();
     _queuedAutomationChangedPaths.clear();
+    for (final shell in shellSessions) {
+      if (!shell.isRunning) {
+        continue;
+      }
+      shell.status = 'disconnected';
+      shell.stdinClosed = true;
+    }
     if (clearUiState) {
       activeThreadName = null;
       activeThreadCwd = '';
@@ -723,6 +776,216 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
     );
   }
 
+  Future<void> ensureInitialShellSession({
+    required int rows,
+    required int cols,
+  }) async {
+    if (shellSessions.isNotEmpty) {
+      final activeId = activeShellSessionId;
+      if (activeId == null || !_shellSessionsById.containsKey(activeId)) {
+        activeShellSessionId = shellSessions.first.id;
+        notifyListeners();
+      }
+      return;
+    }
+    await createShellSession(rows: rows, cols: cols);
+  }
+
+  Future<void> createShellSession({
+    int? insertAfterIndex,
+    int rows = 20,
+    int cols = 80,
+  }) async {
+    final launchContext = defaultShellLaunchContext;
+    final sessionId = 'shell-tab-${DateTime.now().microsecondsSinceEpoch}';
+    final session = ShellSession(
+      id: sessionId,
+      processId: '',
+      cwdDisplay: launchContext.display,
+      spawnCwdMode: launchContext.mode,
+      spawnCwdPath: launchContext.path,
+      sandboxMode: _settings.sandboxMode,
+      allowNetwork: _settings.allowNetwork,
+      disableTimeout: true,
+      timeoutMs: 60000,
+      disableOutputCap: true,
+      outputBytesCap: 32768,
+      usesTty: true,
+      startedAt: DateTime.now(),
+      status: 'starting',
+    );
+    final targetIndex = insertAfterIndex == null
+        ? shellSessions.length
+        : (insertAfterIndex + 1).clamp(0, shellSessions.length).toInt();
+    shellSessions.insert(targetIndex, session);
+    _shellSessionsById[session.id] = session;
+    activeShellSessionId = session.id;
+    final terminal = terminalForShellSession(session.id);
+    terminal.write('Connecting to shell...\r\n');
+    notifyListeners();
+    await _launchShellSession(session.id, rows: rows, cols: cols);
+  }
+
+  void updateShellSessionSettings(
+    String sessionId, {
+    required String cwdText,
+    required SandboxMode sandboxMode,
+    required bool allowNetwork,
+    required bool disableTimeout,
+    required int timeoutMs,
+    required bool disableOutputCap,
+    required int outputBytesCap,
+  }) {
+    final current = _shellSessionsById[sessionId];
+    if (current == null) {
+      return;
+    }
+    final launchContext = _shellLaunchContextFromInput(cwdText);
+    _replaceShellSession(
+      current.copyWith(
+        cwdDisplay: launchContext.display,
+        spawnCwdMode: launchContext.mode,
+        spawnCwdPath: launchContext.path,
+        sandboxMode: sandboxMode,
+        allowNetwork: allowNetwork,
+        disableTimeout: disableTimeout,
+        timeoutMs: timeoutMs,
+        disableOutputCap: disableOutputCap,
+        outputBytesCap: outputBytesCap,
+      ),
+    );
+    notifyListeners();
+  }
+
+  void selectShellSession(String sessionId) {
+    if (_shellSessionsById.containsKey(sessionId)) {
+      activeShellSessionId = sessionId;
+      notifyListeners();
+    }
+  }
+
+  Future<void> restartShellSession(
+    String sessionId, {
+    required int rows,
+    required int cols,
+  }) async {
+    final current = _shellSessionsById[sessionId];
+    if (current == null) {
+      return;
+    }
+    if (current.isRunning) {
+      await terminateShellSession(sessionId);
+    }
+    final terminal = terminalForShellSession(sessionId);
+    terminal.write('\r\n[restarting shell]\r\n');
+    await _launchShellSession(sessionId, rows: rows, cols: cols);
+  }
+
+  Future<void> _launchShellSession(
+    String sessionId, {
+    required int rows,
+    required int cols,
+  }) async {
+    final current = _shellSessionsById[sessionId];
+    if (current == null || current.isRunning) {
+      return;
+    }
+
+    if (!isConnected) {
+      await connect();
+      if (!isConnected) {
+        final failed = _shellSessionsById[sessionId];
+        if (failed != null) {
+          _replaceShellSession(
+            failed.copyWith(status: 'failed', stdinClosed: true),
+          );
+          notifyListeners();
+        }
+        return;
+      }
+    }
+
+    final processId = 'shell-${DateTime.now().microsecondsSinceEpoch}';
+    final session = current.copyWith(
+      processId: processId,
+      status: 'running',
+      stdinClosed: false,
+      startedAt: DateTime.now(),
+      clearExitCode: true,
+    );
+    _replaceShellSession(session);
+    activeShellSessionId = session.id;
+    notifyListeners();
+
+    final id = _requestId++;
+    final completer = Completer<Map<String, dynamic>?>();
+    _pendingRequests[id] = completer;
+    final params = <String, dynamic>{
+      'command': _shellCommand(session),
+      if (session.spawnCwdMode == ShellSpawnCwdMode.threadPath &&
+          session.spawnCwdPath.trim().isNotEmpty)
+        'cwd': session.spawnCwdPath.trim(),
+      'processId': processId,
+      'streamStdoutStderr': true,
+      'streamStdin': true,
+      'tty': true,
+      'size': <String, dynamic>{'rows': rows, 'cols': cols},
+      'sandboxPolicy': _buildCommandSandboxPolicy(
+        session.sandboxMode,
+        session.allowNetwork,
+        session.spawnCwdMode == ShellSpawnCwdMode.threadPath
+            ? session.spawnCwdPath.trim()
+            : '',
+      ),
+      if (session.disableOutputCap) 'disableOutputCap': true,
+      if (!session.disableOutputCap && session.outputBytesCap > 0)
+        'outputBytesCap': session.outputBytesCap,
+      if (session.disableTimeout) 'disableTimeout': true,
+      if (!session.disableTimeout && session.timeoutMs > 0)
+        'timeoutMs': session.timeoutMs,
+    };
+
+    try {
+      await _send(<String, dynamic>{
+        'id': id,
+        'method': 'command/exec',
+        'params': params,
+      });
+    } catch (error) {
+      _pendingRequests.remove(id);
+      terminalForShellSession(
+        session.id,
+      ).write('\r\n[failed to start shell: $error]\r\n');
+      final failed = _shellSessionsById[session.id];
+      if (failed != null) {
+        _replaceShellSession(
+          failed.copyWith(status: 'failed', stdinClosed: true),
+        );
+      }
+      notifyListeners();
+      return;
+    }
+
+    unawaited(
+      completer.future
+          .then((Map<String, dynamic>? result) {
+            _completeShellSession(session.id, result);
+          })
+          .catchError((Object error) {
+            terminalForShellSession(
+              session.id,
+            ).write('\r\n[shell error: $error]\r\n');
+            final failed = _shellSessionsById[session.id];
+            if (failed != null) {
+              _replaceShellSession(
+                failed.copyWith(status: 'failed', stdinClosed: true),
+              );
+              notifyListeners();
+            }
+          }),
+    );
+  }
+
   Future<CommandSession?> _startCommandExecutionInternal({
     required String commandText,
     required String cwd,
@@ -833,10 +1096,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       return session;
     }
 
-    if (mode == CommandSessionMode.interactive && usesTty) {
-      unawaited(_primeInteractiveSessionSize(session, rows: rows, cols: cols));
-    }
-
     final completion = completer.future
         .then((Map<String, dynamic>? result) {
           _pendingCommandRequestsById.remove(id);
@@ -857,6 +1116,88 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       unawaited(completion);
     }
     return session;
+  }
+
+  Future<void> writeToShellSession(String sessionId, String data) async {
+    final shell = _shellSessionsById[sessionId];
+    if (shell == null ||
+        !shell.isRunning ||
+        shell.stdinClosed ||
+        data.isEmpty) {
+      return;
+    }
+    await _request('command/exec/write', <String, dynamic>{
+      'processId': shell.processId,
+      'deltaBase64': base64Encode(utf8.encode(data)),
+    });
+  }
+
+  Future<void> resizeShellSession(
+    String sessionId, {
+    required int rows,
+    required int cols,
+  }) async {
+    final shell = _shellSessionsById[sessionId];
+    if (shell == null || !shell.isRunning || !shell.usesTty) {
+      return;
+    }
+    await _request('command/exec/resize', <String, dynamic>{
+      'processId': shell.processId,
+      'size': <String, dynamic>{'rows': rows, 'cols': cols},
+    });
+  }
+
+  Future<void> terminateShellSession(String sessionId) async {
+    final shell = _shellSessionsById[sessionId];
+    if (shell == null || !shell.isRunning) {
+      return;
+    }
+    await _request('command/exec/terminate', <String, dynamic>{
+      'processId': shell.processId,
+    });
+    _replaceShellSession(
+      shell.copyWith(status: 'terminated', stdinClosed: true),
+    );
+    notifyListeners();
+  }
+
+  Future<void> closeShellSession(String sessionId) async {
+    final shell = _shellSessionsById[sessionId];
+    if (shell == null) {
+      return;
+    }
+    if (shell.isRunning) {
+      try {
+        await _request('command/exec/terminate', <String, dynamic>{
+          'processId': shell.processId,
+        });
+      } catch (_) {
+        // Best effort. Close should still remove the tab locally.
+      }
+    }
+
+    final removedIndex = shellSessions.indexWhere(
+      (item) => item.id == sessionId,
+    );
+    if (removedIndex != -1) {
+      shellSessions.removeAt(removedIndex);
+    }
+    _shellSessionsById.remove(sessionId);
+    if (shell.processId.isNotEmpty) {
+      _shellSessionsByProcessId.remove(shell.processId);
+    }
+    _shellTerminalsBySessionId.remove(sessionId);
+
+    if (activeShellSessionId == sessionId) {
+      if (shellSessions.isEmpty) {
+        activeShellSessionId = null;
+      } else {
+        final nextIndex = removedIndex.clamp(0, shellSessions.length - 1);
+        activeShellSessionId = shellSessions[nextIndex].id;
+      }
+    }
+
+    notifyListeners();
   }
 
   Future<void> writeToCommandSession(
@@ -916,35 +1257,6 @@ class AppController extends ChangeNotifier with WidgetsBindingObserver {
       'processId': session.processId,
       'size': <String, dynamic>{'rows': rows, 'cols': cols},
     });
-  }
-
-  Future<void> _primeInteractiveSessionSize(
-    CommandSession session, {
-    required int rows,
-    required int cols,
-  }) async {
-    const delays = <Duration>[
-      Duration.zero,
-      Duration(milliseconds: 250),
-      Duration(milliseconds: 1000),
-    ];
-
-    for (final delay in delays) {
-      if (!session.isInteractive || !session.usesTty || !session.isRunning) {
-        return;
-      }
-      if (delay > Duration.zero) {
-        await Future<void>.delayed(delay);
-      }
-      try {
-        await _request('command/exec/resize', <String, dynamic>{
-          'processId': session.processId,
-          'size': <String, dynamic>{'rows': rows, 'cols': cols},
-        });
-      } catch (_) {
-        // Ignore resize failures; later attempts or layout-driven resize may still succeed.
-      }
-    }
   }
 
   bool _shouldUseTtyForCommand(String commandText, CommandSessionMode mode) {
@@ -3639,6 +3951,15 @@ while not server.served and time.time() < deadline:
               );
             }
           }
+          final shell = _shellSessionsByProcessId[processId];
+          if (shell != null) {
+            final terminal = terminalForShellSession(shell.id);
+            terminal.write(utf8.decode(rawBytes, allowMalformed: true));
+            if (typedParams['capReached'] == true) {
+              terminal.write('\r\n[output cap reached]\r\n');
+            }
+            notifyListeners();
+          }
           final session = _commandSessionsByProcessId[processId];
           if (session != null) {
             final decoded = utf8.decode(rawBytes, allowMalformed: true);
@@ -3935,6 +4256,108 @@ while not server.served and time.time() < deadline:
     }
     return _commandSessionsById[activeCommandSessionId!] ??
         (commandSessions.isEmpty ? null : commandSessions.first);
+  }
+
+  void _completeShellSession(String sessionId, Map<String, dynamic>? result) {
+    final shell = _shellSessionsById[sessionId];
+    if (shell == null) {
+      return;
+    }
+    final stdout = result?['stdout']?.toString() ?? '';
+    final stderr = result?['stderr']?.toString() ?? '';
+    final terminal = terminalForShellSession(shell.id);
+    if (stdout.isNotEmpty) {
+      terminal.write(stdout);
+    }
+    if (stderr.isNotEmpty) {
+      terminal.write(stderr);
+    }
+    final exitCode = result?['exitCode'];
+    if (exitCode != null) {
+      terminal.write('\r\n[process exited $exitCode]\r\n');
+    }
+    _shellSessionsByProcessId.remove(shell.processId);
+    final status = shell.status == 'terminated'
+        ? 'terminated'
+        : (result?['exitCode'] as int?) == 0
+        ? 'completed'
+        : 'failed';
+    _replaceShellSession(
+      shell.copyWith(
+        status: status,
+        stdinClosed: true,
+        exitCode: result?['exitCode'] as int?,
+      ),
+    );
+    notifyListeners();
+  }
+
+  void _replaceShellSession(ShellSession session) {
+    final index = shellSessions.indexWhere((item) => item.id == session.id);
+    if (index != -1) {
+      final previous = shellSessions[index];
+      if (previous.processId.isNotEmpty &&
+          previous.processId != session.processId) {
+        _shellSessionsByProcessId.remove(previous.processId);
+      }
+      shellSessions[index] = session;
+    } else {
+      shellSessions.add(session);
+    }
+    _shellSessionsById[session.id] = session;
+    if (session.processId.isNotEmpty) {
+      _shellSessionsByProcessId[session.processId] = session;
+    }
+  }
+
+  List<String> _shellCommand(ShellSession session) {
+    final command = session.spawnCwdMode == ShellSpawnCwdMode.home
+        ? 'cd ~ && exec /bin/bash -l'
+        : 'exec /bin/bash -l';
+    return <String>['/bin/bash', '-lc', command];
+  }
+
+  _ShellLaunchContext _shellLaunchContextFromInput(String cwdText) {
+    final trimmed = cwdText.trim();
+    if (trimmed.isEmpty) {
+      return defaultShellLaunchContext;
+    }
+    if (trimmed == '~' || trimmed == '~/') {
+      return const _ShellLaunchContext(
+        mode: ShellSpawnCwdMode.home,
+        path: '',
+        display: '~/',
+      );
+    }
+    return _ShellLaunchContext(
+      mode: ShellSpawnCwdMode.threadPath,
+      path: trimmed,
+      display: trimmed,
+    );
+  }
+
+  String shellSessionTabLabel(ShellSession session) {
+    if (session.spawnCwdMode == ShellSpawnCwdMode.home) {
+      return '~';
+    }
+    final trimmed = session.cwdDisplay.trim();
+    if (trimmed.isEmpty) {
+      return 'shell';
+    }
+    final normalized = trimmed.endsWith('/') && trimmed.length > 1
+        ? trimmed.substring(0, trimmed.length - 1)
+        : trimmed;
+    final segments = normalized.split('/').where((part) => part.isNotEmpty);
+    return segments.isEmpty ? normalized : segments.last;
+  }
+
+  String shellSessionWorkingDirectoryText(ShellSession? session) {
+    if (session == null) {
+      return defaultShellLaunchContext.display;
+    }
+    return session.spawnCwdMode == ShellSpawnCwdMode.home
+        ? '~/'
+        : session.spawnCwdPath;
   }
 
   void _completeCommandSession(
@@ -5156,6 +5579,18 @@ class _TransferEndpoint {
 
   final int port;
   final String token;
+}
+
+class _ShellLaunchContext {
+  const _ShellLaunchContext({
+    required this.mode,
+    required this.path,
+    required this.display,
+  });
+
+  final ShellSpawnCwdMode mode;
+  final String path;
+  final String display;
 }
 
 class _DownloadCancelled implements Exception {
