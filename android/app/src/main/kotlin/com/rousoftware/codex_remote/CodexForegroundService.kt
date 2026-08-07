@@ -18,6 +18,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.io.File
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
 
@@ -83,6 +84,12 @@ class CodexForegroundService : Service() {
                 val payload = intent.getStringExtra(EXTRA_PAYLOAD)
                 if (!payload.isNullOrBlank()) {
                     sendOrQueue(payload)
+                }
+            }
+            ACTION_SEND_FILE -> {
+                val path = intent.getStringExtra(EXTRA_PAYLOAD_FILE)
+                if (!path.isNullOrBlank()) {
+                    sendPayloadFile(path)
                 }
             }
             ACTION_DISCONNECT -> {
@@ -201,6 +208,29 @@ class CodexForegroundService : Service() {
         }
     }
 
+    private fun sendPayloadFile(path: String) {
+        val file = File(path)
+        if (!file.exists()) {
+            CodexServiceBridge.pushEvent(
+                """{"method":"android/transportStatus","params":{"status":"error","message":"Payload file missing."}}"""
+            )
+            return
+        }
+        val payload = try {
+            file.readText()
+        } catch (t: Throwable) {
+            CodexServiceBridge.pushEvent(
+                """{"method":"android/transportStatus","params":{"status":"error","message":${(t.message ?: "Failed to read payload file").quoteJson()}}}"""
+            )
+            return
+        } finally {
+            file.delete()
+        }
+        if (payload.isNotBlank()) {
+            sendOrQueue(payload)
+        }
+    }
+
     private fun flushPendingMessages(webSocket: WebSocket) {
         while (socket === webSocket && isSocketOpen) {
             val payload = pendingMessages.poll() ?: break
@@ -275,10 +305,12 @@ class CodexForegroundService : Service() {
         private const val NOTIFICATION_ID = 31041
         const val ACTION_CONNECT = "codex_remote.action.CONNECT"
         const val ACTION_SEND = "codex_remote.action.SEND"
+        const val ACTION_SEND_FILE = "codex_remote.action.SEND_FILE"
         const val ACTION_DISCONNECT = "codex_remote.action.DISCONNECT"
         const val EXTRA_URL = "url"
         const val EXTRA_BEARER_TOKEN = "bearerToken"
         const val EXTRA_PAYLOAD = "payload"
+        const val EXTRA_PAYLOAD_FILE = "payloadFile"
 
         fun startService(context: Context, intent: Intent) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

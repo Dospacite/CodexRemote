@@ -170,6 +170,28 @@ void main() {
     expect(find.textContaining('bold'), findsOneWidget);
   });
 
+  testWidgets('context compaction items use the dedicated compacting widget', (
+    WidgetTester tester,
+  ) async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
+    await controller.connect();
+    controller.activeThreadId = 'thr_1';
+    transport.emitNotification('item/completed', <String, dynamic>{
+      'threadId': 'thr_1',
+      'turnId': 'turn_1',
+      'item': <String, dynamic>{
+        'id': 'context-compaction-1',
+        'type': 'contextCompaction',
+      },
+    });
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+
+    expect(find.text('Context Compacting'), findsOneWidget);
+    expect(find.textContaining('"type": "contextCompaction"'), findsNothing);
+  });
+
   testWidgets(
     'long-pressing a user message exposes copy and edit, and edit loads the composer',
     (WidgetTester tester) async {
@@ -217,6 +239,24 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('Remote cwd'), findsNothing);
+  });
+
+  testWidgets('settings exposes thread load timeout field', (
+    WidgetTester tester,
+  ) async {
+    final controller = AppController.testing();
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Thread load timeout ms'), findsOneWidget);
+    expect(
+      find.text(
+        'Used for thread list, thread read, and thread resume requests.',
+      ),
+      findsOneWidget,
+    );
   });
 
   testWidgets('automation page filters to current thread by default', (
@@ -395,46 +435,110 @@ void main() {
     },
   );
 
-  testWidgets(
-    'thread list shows an indicator for threads with active turns',
-    (WidgetTester tester) async {
-      final transport = _FakeTransport();
-      transport.threadListData = <Map<String, dynamic>>[
+  test('thread history loading uses the configured timeout', () async {
+    final transport = _FakeTransport()
+      ..delayNextThreadList = Completer<void>()
+      ..threadListData = <Map<String, dynamic>>[
         <String, dynamic>{
           'id': 'thr_1',
-          'preview': 'Running',
-          'cwd': '/workspace/active',
-          'source': 'local',
-          'modelProvider': 'openai',
-          'status': 'inProgress',
-          'name': 'Running thread',
-        },
-        <String, dynamic>{
-          'id': 'thr_idle',
-          'preview': 'Idle',
-          'cwd': '/workspace/idle',
+          'preview': 'Thread one',
+          'cwd': '/thread-cwd',
           'source': 'local',
           'modelProvider': 'openai',
           'status': 'idle',
-          'name': 'Idle thread',
+          'name': 'Thread One',
         },
       ];
+    final controller = AppController.testing(transport: transport);
+    await controller.saveSettings(
+      controller.settings.copyWith(threadLoadTimeoutMs: 30),
+    );
+
+    await controller.loadThreadHistory(reset: true);
+
+    expect(controller.threadHistory, isEmpty);
+    expect(
+      controller.threadHistoryError,
+      contains('Request timed out: thread/list'),
+    );
+  });
+
+  testWidgets('thread list shows an indicator for threads with active turns', (
+    WidgetTester tester,
+  ) async {
+    final transport = _FakeTransport();
+    transport.threadListData = <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 'thr_1',
+        'preview': 'Running',
+        'cwd': '/workspace/active',
+        'source': 'local',
+        'modelProvider': 'openai',
+        'status': 'inProgress',
+        'name': 'Running thread',
+      },
+      <String, dynamic>{
+        'id': 'thr_idle',
+        'preview': 'Idle',
+        'cwd': '/workspace/idle',
+        'source': 'local',
+        'modelProvider': 'openai',
+        'status': 'idle',
+        'name': 'Idle thread',
+      },
+    ];
+    final controller = AppController.testing(transport: transport);
+    await controller.sendPrompt('first');
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+    await tester.tap(find.byTooltip('Threads'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 250));
+
+    expect(
+      find.byKey(const ValueKey<String>('thread-active-turn-thr_1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('thread-active-turn-thr_idle')),
+      findsNothing,
+    );
+  });
+
+  testWidgets(
+    'opening threads while disconnected only opens one thread sheet after connect',
+    (WidgetTester tester) async {
+      final connectGate = Completer<void>();
+      final transport = _FakeTransport()
+        ..delayNextConnect = connectGate
+        ..threadListData = <Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 'thr_1',
+            'preview': 'Thread one',
+            'cwd': '/thread-cwd',
+            'source': 'local',
+            'modelProvider': 'openai',
+            'status': 'idle',
+            'name': 'Thread One',
+          },
+        ];
       final controller = AppController.testing(transport: transport);
-      await controller.sendPrompt('first');
 
       await tester.pumpWidget(CodexRemoteApp(controller: controller));
+
       await tester.tap(find.byTooltip('Threads'));
       await tester.pump();
-      await tester.pump(const Duration(milliseconds: 250));
+      await tester.tap(find.byTooltip('Threads'), warnIfMissed: false);
+      await tester.pump();
 
-      expect(
-        find.byKey(const ValueKey<String>('thread-active-turn-thr_1')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey<String>('thread-active-turn-thr_idle')),
-        findsNothing,
-      );
+      expect(transport.connectCount, 0);
+
+      connectGate.complete();
+      await tester.pumpAndSettle();
+
+      expect(transport.connectCount, 1);
+      expect(find.byType(ThreadHistorySheet), findsOneWidget);
+      expect(find.text('Thread One'), findsOneWidget);
     },
   );
 
@@ -482,8 +586,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Command Center'), findsOneWidget);
-    expect(find.byKey(const ValueKey<String>('command-shell-panel')), findsOneWidget);
-    expect(find.byKey(const ValueKey<String>('command-shell-input')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey<String>('command-shell-panel')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('command-shell-input')),
+      findsOneWidget,
+    );
     expect(find.text('Shell history'), findsOneWidget);
     expect(find.byTooltip('Command settings'), findsOneWidget);
     expect(find.text('Setup'), findsNothing);
@@ -528,6 +638,28 @@ void main() {
       find.byKey(const ValueKey<String>('command-shell-input')),
     );
     expect(shellInput.controller?.text, 'git status');
+  });
+
+  testWidgets('command center disables timeout for flutter build commands', (
+    WidgetTester tester,
+  ) async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
+
+    await tester.pumpWidget(CodexRemoteApp(controller: controller));
+    await tester.tap(find.byTooltip('Command'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey<String>('command-shell-input')),
+      'flutter build apk --release',
+    );
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+
+    expect(transport.lastShellCommand, 'flutter build apk --release');
+    expect(transport.lastCommandDisableTimeout, isTrue);
+    expect(transport.lastCommandTimeoutMs, isNull);
   });
 
   testWidgets('shell history clear button only removes finished runs', (
@@ -790,48 +922,45 @@ void main() {
     },
   );
 
-  test(
-    'queued prompt waits for turn completed after final answer',
-    () async {
-      final transport = _FakeTransport();
-      final controller = AppController.testing(transport: transport);
+  test('queued prompt waits for turn completed after final answer', () async {
+    final transport = _FakeTransport();
+    final controller = AppController.testing(transport: transport);
 
-      await controller.sendPrompt('first');
-      await controller.sendPrompt('second');
-      expect(controller.queuedPromptCount, 1);
+    await controller.sendPrompt('first');
+    await controller.sendPrompt('second');
+    expect(controller.queuedPromptCount, 1);
 
-      transport.emitNotification('item/completed', <String, dynamic>{
-        'threadId': 'thr_1',
-        'turnId': 'turn_1',
-        'item': <String, dynamic>{
-          'id': 'msg_1',
-          'type': 'agentMessage',
-          'text': 'done',
-          'phase': 'final_answer',
-        },
-      });
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+    transport.emitNotification('item/completed', <String, dynamic>{
+      'threadId': 'thr_1',
+      'turnId': 'turn_1',
+      'item': <String, dynamic>{
+        'id': 'msg_1',
+        'type': 'agentMessage',
+        'text': 'done',
+        'phase': 'final_answer',
+      },
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
 
-      expect(controller.queuedPromptCount, 1);
-      expect(transport.turnStartCount, 1);
-      expect(controller.activeTurnId, 'turn_1');
+    expect(controller.queuedPromptCount, 1);
+    expect(transport.turnStartCount, 1);
+    expect(controller.activeTurnId, 'turn_1');
 
-      transport.emitNotification('turn/completed', <String, dynamic>{
-        'threadId': 'thr_1',
-        'turn': <String, dynamic>{
-          'id': 'turn_1',
-          'status': 'completed',
-          'items': <dynamic>[],
-          'error': null,
-        },
-      });
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+    transport.emitNotification('turn/completed', <String, dynamic>{
+      'threadId': 'thr_1',
+      'turn': <String, dynamic>{
+        'id': 'turn_1',
+        'status': 'completed',
+        'items': <dynamic>[],
+        'error': null,
+      },
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
 
-      expect(controller.queuedPromptCount, 0);
-      expect(transport.turnStartCount, 2);
-      expect(controller.activeTurnId, 'turn_2');
-    },
-  );
+    expect(controller.queuedPromptCount, 0);
+    expect(transport.turnStartCount, 2);
+    expect(controller.activeTurnId, 'turn_2');
+  });
 
   test(
     'controller supports explicit steering while a turn is active',
@@ -1179,7 +1308,7 @@ void main() {
   );
 
   test(
-    'controller sends text files inline and images as image inputs',
+    'controller sends text files inline and images as local image inputs',
     () async {
       final transport = _FakeTransport();
       final controller = AppController.testing(transport: transport);
@@ -1207,26 +1336,71 @@ void main() {
       final input = transport.lastTurnStartInput!;
       expect(input.first['type'], 'text');
       expect(input.first['text'], contains('Attached file: notes.md'));
-      expect(input.last, <String, dynamic>{
-        'type': 'image',
-        'url': 'data:image/png;base64,AQID',
-      });
+      expect(input.last['type'], 'localImage');
+      final uploadedPath = input.last['path']?.toString() ?? '';
+      expect(uploadedPath, startsWith('/thread-cwd/.codex_remote_image_'));
+      expect(uploadedPath, endsWith('.png'));
+      expect(
+        transport._fileBytesByPath[uploadedPath],
+        Uint8List.fromList(<int>[1, 2, 3]),
+      );
     },
   );
 
-  test('switching threads remains possible while another turn is running', () async {
-    final transport = _FakeTransport();
-    final controller = AppController.testing(transport: transport);
+  test(
+    'uploaded image temp files are removed after the turn completes',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
 
-    await controller.sendPrompt('first');
-    expect(controller.threadHasActiveTurn('thr_1'), isTrue);
+      await controller.sendPrompt(
+        'Review this image',
+        attachments: <ComposerAttachment>[
+          ComposerAttachment(
+            id: 'image-1',
+            fileName: 'image.png',
+            kind: ComposerAttachmentKind.image,
+            bytes: Uint8List.fromList(<int>[1, 2, 3]),
+            mimeType: 'image/png',
+          ),
+        ],
+      );
 
-    await controller.resumeThreadFromHistory('thr_2');
+      final uploadedPath =
+          transport.lastTurnStartInput!.last['path']?.toString() ?? '';
+      expect(uploadedPath, isNotEmpty);
 
-    expect(controller.activeThreadId, 'thr_2');
-    expect(controller.threadHasActiveTurn('thr_1'), isTrue);
-    expect(controller.hasActiveTurn, isTrue);
-  });
+      transport.emitNotification('turn/completed', <String, dynamic>{
+        'threadId': 'thr_1',
+        'turn': <String, dynamic>{
+          'id': 'turn_1',
+          'status': 'completed',
+          'error': null,
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(transport.removedPaths, contains(uploadedPath));
+      expect(transport._fileBytesByPath.containsKey(uploadedPath), isFalse);
+    },
+  );
+
+  test(
+    'switching threads remains possible while another turn is running',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+
+      await controller.sendPrompt('first');
+      expect(controller.threadHasActiveTurn('thr_1'), isTrue);
+
+      await controller.resumeThreadFromHistory('thr_2');
+
+      expect(controller.activeThreadId, 'thr_2');
+      expect(controller.threadHasActiveTurn('thr_1'), isTrue);
+      expect(controller.hasActiveTurn, isTrue);
+    },
+  );
 
   test('file download streams to the chosen directory', () async {
     final transport = _FakeTransport();
@@ -1392,26 +1566,29 @@ void main() {
     }
   });
 
-  test('relay connections report the relay endpoint in the status log', () async {
-    final transport = _FakeTransport();
-    final controller = AppController.testing(transport: transport);
-    await controller.saveSettings(
-      controller.settings.copyWith(
-        connectionMode: ConnectionMode.relay,
-        relayUrl: 'https://relay.example.com',
-      ),
-    );
+  test(
+    'relay connections report the relay endpoint in the status log',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+      await controller.saveSettings(
+        controller.settings.copyWith(
+          connectionMode: ConnectionMode.relay,
+          relayUrl: 'https://relay.example.com',
+        ),
+      );
 
-    await controller.connect();
+      await controller.connect();
 
-    expect(controller.status, ConnectionStatus.ready);
-    expect(
-      controller.entries.any(
-        (entry) => entry.body == 'Connected to https://relay.example.com.',
-      ),
-      isTrue,
-    );
-  });
+      expect(controller.status, ConnectionStatus.ready);
+      expect(
+        controller.entries.any(
+          (entry) => entry.body == 'Connected to https://relay.example.com.',
+        ),
+        isTrue,
+      );
+    },
+  );
 
   testWidgets(
     'file preview opens as a full-screen route from the file browser',
@@ -1758,6 +1935,57 @@ void main() {
   });
 
   test(
+    'reconnect preserves automation watches for the same endpoint',
+    () async {
+      final transport = _FakeTransport()..failOnDuplicateWatchPaths = true;
+      final controller = AppController.testing(transport: transport);
+
+      await controller.connect();
+      await controller.saveAutomation(
+        const AutomationDefinition(
+          id: 'automation_reconnect_watch',
+          name: 'Watch android',
+          enabled: true,
+          nodes: <AutomationNode>[
+            AutomationNode(
+              id: 'trigger_1',
+              kind: AutomationNodeKind.watchDirectoryChanged,
+              path: '/home/ege/Documents/Projects/codex_remote/android',
+            ),
+            AutomationNode(
+              id: 'action_1',
+              kind: AutomationNodeKind.runCommand,
+              commandText: 'echo build',
+            ),
+          ],
+        ),
+      );
+
+      expect(
+        transport.watchPathsById.values.where(
+          (path) => path == '/home/ege/Documents/Projects/codex_remote/android',
+        ),
+        hasLength(1),
+      );
+
+      await controller.connect();
+
+      expect(
+        transport.watchPathsById.values.where(
+          (path) => path == '/home/ege/Documents/Projects/codex_remote/android',
+        ),
+        hasLength(1),
+      );
+      expect(
+        controller.entries.any(
+          (entry) => entry.body.contains('Already watching path'),
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test(
     'turn completed automation runs its command after a completed turn',
     () async {
       final transport = _FakeTransport();
@@ -1929,31 +2157,34 @@ void main() {
     },
   );
 
-  test('controller reconnects after resume when transport drops unexpectedly', () async {
-    final transport = _FakeTransport();
-    final controller = AppController.testing(transport: transport);
-    await controller.saveSettings(
-      controller.settings.copyWith(
-        connectionMode: ConnectionMode.relay,
-        relayUrl: 'https://relay.example.com',
-      ),
-    );
+  test(
+    'controller reconnects after resume when transport drops unexpectedly',
+    () async {
+      final transport = _FakeTransport();
+      final controller = AppController.testing(transport: transport);
+      await controller.saveSettings(
+        controller.settings.copyWith(
+          connectionMode: ConnectionMode.relay,
+          relayUrl: 'https://relay.example.com',
+        ),
+      );
 
-    await controller.sendPrompt('first');
-    expect(controller.status, ConnectionStatus.ready);
-    expect(transport.connectCount, 1);
+      await controller.sendPrompt('first');
+      expect(controller.status, ConnectionStatus.ready);
+      expect(transport.connectCount, 1);
 
-    transport.simulateUnexpectedDisconnect();
-    await Future<void>.delayed(const Duration(milliseconds: 10));
-    expect(controller.status, ConnectionStatus.error);
+      transport.simulateUnexpectedDisconnect();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(controller.status, ConnectionStatus.error);
 
-    controller.didChangeAppLifecycleState(AppLifecycleState.paused);
-    controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+      controller.didChangeAppLifecycleState(AppLifecycleState.paused);
+      controller.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    expect(transport.connectCount, 2);
-    expect(controller.status, ConnectionStatus.ready);
-  });
+      expect(transport.connectCount, 2);
+      expect(controller.status, ConnectionStatus.ready);
+    },
+  );
 }
 
 class _FakeTransport implements AppTransport {
@@ -1991,8 +2222,11 @@ class _FakeTransport implements AppTransport {
   bool? lastDownloadDisableTimeout;
   bool? lastCommandUsesTty;
   bool? lastCommandStreamsStdin;
+  bool? lastCommandDisableTimeout;
+  int? lastCommandTimeoutMs;
   Uri? lastConnectedUri;
   final List<String> unsubscribedThreadIds = <String>[];
+  final List<String> removedPaths = <String>[];
   int _watchCounter = 0;
   final Map<String, String> watchPathsById = <String, String>{};
   Completer<void>? delayNextTurnStart;
@@ -2002,6 +2236,8 @@ class _FakeTransport implements AppTransport {
   bool failOnDuplicateWatchPaths = false;
   bool failHomeDirectoryRead = false;
   List<Map<String, dynamic>> threadListData = <Map<String, dynamic>>[];
+  Completer<void>? delayNextConnect;
+  Completer<void>? delayNextThreadList;
 
   @override
   Stream<String> get messages => _controller.stream;
@@ -2011,6 +2247,11 @@ class _FakeTransport implements AppTransport {
 
   @override
   Future<void> connect(AppSettings settings) async {
+    if (delayNextConnect != null) {
+      final gate = delayNextConnect!;
+      delayNextConnect = null;
+      await gate.future;
+    }
     _connected = true;
     connectCount += 1;
     lastConnectedUri = Uri.parse(
@@ -2060,6 +2301,18 @@ class _FakeTransport implements AppTransport {
       return;
     }
     if (method == 'thread/list') {
+      if (delayNextThreadList != null) {
+        final gate = delayNextThreadList!;
+        delayNextThreadList = null;
+        unawaited(() async {
+          await gate.future;
+          _respond(id as int, <String, dynamic>{
+            'data': threadListData,
+            'nextCursor': null,
+          });
+        }());
+        return;
+      }
       _respond(id as int, <String, dynamic>{
         'data': threadListData,
         'nextCursor': null,
@@ -2185,6 +2438,8 @@ class _FakeTransport implements AppTransport {
       }
       lastCommandUsesTty = params['tty'] == true;
       lastCommandStreamsStdin = params['streamStdin'] == true;
+      lastCommandDisableTimeout = params['disableTimeout'] == true;
+      lastCommandTimeoutMs = params['timeoutMs'] as int?;
       if (command.length >= 3 &&
           command.first == '/bin/bash' &&
           command[2] == r'wc -c < "$1"') {
@@ -2376,6 +2631,15 @@ class _FakeTransport implements AppTransport {
       final dataBase64 = params['dataBase64']?.toString() ?? '';
       _fileBytesByPath[path] = Uint8List.fromList(base64Decode(dataBase64));
       _modifiedAtByPath[path] = (_modifiedAtByPath[path] ?? 0) + 1;
+      _respond(id as int, <String, dynamic>{});
+      return;
+    }
+    if (method == 'fs/remove') {
+      final params = decoded['params'] as Map<String, dynamic>;
+      final path = params['path']?.toString() ?? '';
+      removedPaths.add(path);
+      _fileBytesByPath.remove(path);
+      _modifiedAtByPath.remove(path);
       _respond(id as int, <String, dynamic>{});
       return;
     }
